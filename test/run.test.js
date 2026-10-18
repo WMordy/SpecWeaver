@@ -23,6 +23,7 @@ import {
   generatedDataPath,
   generatedScriptPath,
   mapK6ExitCode,
+  rawResultsPath,
   resolveK6,
   runGeneratedTest,
 } from "../dist/run.js";
@@ -211,8 +212,55 @@ test("runGeneratedTest resolves k6 from the supplied PATH when no command is giv
   assert.equal(calls[0].command, file);
 });
 
-// --- Temp-script lifecycle (locked decision 2) -----------------------------
+// --- Result capture (SPEC-8, A3) -------------------------------------------
 
+test("runGeneratedTest captures k6 metrics via --out json=<tempfile> when asked", async () => {
+  const { dir } = dirWithExecutable();
+  const scriptPath = generatedScriptPath(dir);
+  writeFileSync(scriptPath, "// generated\n");
+
+  const capturePath = rawResultsPath(dir);
+  const ndjson = '{"type":"Point","metric":"iterations","data":{"value":1}}\n';
+  writeFileSync(capturePath, ndjson);
+
+  const { impl, calls } = spawnStub(0);
+  const result = await runGeneratedTest({
+    command: "/fake/k6",
+    scriptPath,
+    directory: dir,
+    captureResults: true,
+    spawn: impl,
+  });
+
+  assert.equal(result.rawResults, ndjson);
+  assert.deepEqual(calls[0].args, [
+    "run",
+    "--out",
+    `json=${capturePath}`,
+    scriptPath,
+  ]);
+  // The capture file is cleaned up with the other temp artifacts.
+  assert.equal(existsSync(capturePath), false);
+});
+
+test("runGeneratedTest does not add --out and returns no raw results by default", async () => {
+  const { dir } = dirWithExecutable();
+  const scriptPath = generatedScriptPath(dir);
+  writeFileSync(scriptPath, "// generated\n");
+
+  const { impl, calls } = spawnStub(0);
+  const result = await runGeneratedTest({
+    command: "/fake/k6",
+    scriptPath,
+    directory: dir,
+    spawn: impl,
+  });
+
+  assert.equal(result.rawResults, undefined);
+  assert.deepEqual(calls[0].args, ["run", scriptPath]);
+});
+
+// --- Temp-script lifecycle (locked decision 2) -----------------------------
 test("runGeneratedTest removes the generated temp artifacts after the run by default", async () => {
   const { dir } = dirWithExecutable();
   const scriptPath = generatedScriptPath(dir);
@@ -307,11 +355,18 @@ function fakeK6(dir, { stdout = "", stderr = "", code = 0 } = {}) {
 }
 
 /** Run the built CLI with a restricted PATH. */
-function runCliWithPath(configPath, pathDir) {
-  return spawnSync(process.execPath, [cliPath, "--config", configPath], {
-    encoding: "utf8",
-    env: { ...process.env, PATH: pathDir },
-  });
+function runCliWithPath(configPath, pathDir, extraArgs = []) {
+  // Isolate each invocation's temp namespace (fixed temp file names under
+  // os.tmpdir(); parallel test files must not share a TMPDIR).
+  const sandbox = mkdtempSync(join(tmpdir(), "sw-tmp-"));
+  return spawnSync(
+    process.execPath,
+    [cliPath, "--config", configPath, ...extraArgs],
+    {
+      encoding: "utf8",
+      env: { ...process.env, PATH: pathDir, TMPDIR: sandbox },
+    },
+  );
 }
 
 test("built CLI prints a single clear k6-missing error and exits non-zero", () => {
@@ -334,7 +389,10 @@ test("built CLI checks presence and forwards a zero k6 exit as success", () => {
   const binDir = mkdtempSync(join(tmpdir(), "sw-bin-"));
   fakeK6(binDir, { stdout: "FAKE_K6_STDOUT", code: 0 });
 
-  const result = runCliWithPath(configPath, binDir);
+  const result = runCliWithPath(configPath, binDir, [
+    "--out",
+    join(dir, "results.json"),
+  ]);
 
   assert.equal(result.status, EXIT_SUCCESS, result.stderr);
   assert.match(result.stdout, /k6 found:/);
@@ -348,7 +406,10 @@ test("built CLI maps a non-zero k6 exit and surfaces it without swallowing", () 
   const binDir = mkdtempSync(join(tmpdir(), "sw-bin-"));
   fakeK6(binDir, { stdout: "FAKE_K6_STDOUT", stderr: "FAKE_K6_STDERR", code: 5 });
 
-  const result = runCliWithPath(configPath, binDir);
+  const result = runCliWithPath(configPath, binDir, [
+    "--out",
+    join(dir, "results.json"),
+  ]);
 
   assert.equal(result.status, EXIT_K6_RUN_FAILURE);
   assert.match(result.stderr, /k6 run failed \(exit code 5\)/);
@@ -367,7 +428,10 @@ test(
     // Present on PATH but not executable -> a spawn-level failure.
     writeFileSync(join(binDir, "k6"), "not executable\n");
 
-    const result = runCliWithPath(configPath, binDir);
+    const result = runCliWithPath(configPath, binDir, [
+      "--out",
+      join(dir, "results.json"),
+    ]);
 
     assert.equal(result.status, EXIT_PREFLIGHT_FAILURE);
     assert.match(result.stderr, /Failed to launch k6/);

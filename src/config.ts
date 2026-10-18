@@ -27,7 +27,7 @@
  *   - method: POST
  *     path: /pets
  *     body: { name: "Fido" }
- * output: results.json        # OPTIONAL, results file path (default owned by SPEC-7)
+ * output: results.json        # OPTIONAL, results file path (default owned by SPEC-8: specweaver-results.json in the cwd)
  * load:                       # OPTIONAL, default vus/duration
  *   vus: 10
  *   duration: 30s
@@ -95,7 +95,11 @@ export interface Config {
   auth?: AuthConfig;
   /** Per-operation payload overrides (consumed by SPEC-4). */
   payloads?: PayloadOverride[];
-  /** Results file path. The default is owned by SPEC-7. */
+  /**
+   * Results file path — names ONLY the SPEC-8 results JSON (never the generated
+   * script/data). The concrete default, `specweaver-results.json` in the current
+   * working directory, is owned by SPEC-8 (A1).
+   */
   output?: string;
   /** Resolved load profile (defaults applied). */
   load: LoadConfig;
@@ -116,8 +120,8 @@ export interface ConfigResult {
   config: Config;
   /**
    * Non-fatal warnings raised while loading (currently unresolved `${ENV_VAR}`
-   * references). Where these are surfaced is owned by SPEC-8 and is not
-   * pinned by SPEC-2.
+   * references). SPEC-8 owns where these are surfaced: stderr, prefixed
+   * `warning:`; they never fail validation or a successful exit code.
    */
   warnings: string[];
 }

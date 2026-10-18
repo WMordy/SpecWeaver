@@ -49,7 +49,7 @@
  *   there is no escaping mechanism in v1.
  *
  * An unresolved reference emits a non-fatal warning — it never throws and never
- * fails validation. The warning's destination is owned by SPEC-8.
+ * fails validation. SPEC-8 owns its destination (stderr, prefixed `warning:`).
  */
 import type { AuthConfig, Config } from "./config.js";
 import type { GeneratedRequestData } from "./request-data.js";

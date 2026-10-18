@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { parseArgs } from "../dist/args.js";
+import { EXIT_SPECWEAVER_ERROR } from "../dist/results.js";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const pkg = JSON.parse(
@@ -33,13 +34,13 @@ test("built CLI --version exits 0 and prints the package version", () => {
 
 test("built CLI with no arguments exits non-zero and prints usage", () => {
   const result = runCli([]);
-  assert.notEqual(result.status, 0);
+  assert.equal(result.status, EXIT_SPECWEAVER_ERROR);
   assert.ok(result.stderr.includes("Usage:"));
 });
 
 test("built CLI with an unknown flag exits non-zero", () => {
   const result = runCli(["--nope"]);
-  assert.notEqual(result.status, 0);
+  assert.equal(result.status, EXIT_SPECWEAVER_ERROR);
   assert.ok(result.stderr.includes("--nope"));
 });
 
@@ -75,7 +76,7 @@ test("parseArgs rejects a malformed --duration", () => {
 
 test("built CLI without --config exits non-zero", () => {
   const result = runCli(["--vus", "5"]);
-  assert.notEqual(result.status, 0);
+  assert.equal(result.status, EXIT_SPECWEAVER_ERROR);
   assert.match(result.stderr, /--config/);
 });
 
@@ -95,7 +96,7 @@ test("built CLI with an invalid config exits non-zero and names the field", () =
   writeFileSync(configPath, "operations: []\n");
 
   const result = runCli(["--config", configPath]);
-  assert.notEqual(result.status, 0);
+  assert.equal(result.status, EXIT_SPECWEAVER_ERROR);
   assert.match(result.stderr, /operations/);
 });
 
@@ -112,7 +113,7 @@ test("built CLI with an invalid spec in the config exits non-zero and reports th
   );
 
   const result = runCli(["--config", configPath]);
-  assert.notEqual(result.status, 0);
+  assert.equal(result.status, EXIT_SPECWEAVER_ERROR);
   assert.match(result.stderr, /not a valid OpenAPI/);
   assert.doesNotMatch(result.stderr, /RangeError/);
 });

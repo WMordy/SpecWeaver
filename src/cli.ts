@@ -1,18 +1,29 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { CliUsageError, USAGE, parseArgs, type CliOptions } from "./args.js";
 import { injectAuth } from "./auth.js";
 import { ConfigError, loadConfig, type ConfigResult } from "./config.js";
 import { generateAllRequestData } from "./request-data.js";
 import {
-  EXIT_PREFLIGHT_FAILURE,
+  EXIT_SPECWEAVER_ERROR,
   EXIT_SUCCESS,
   K6SpawnError,
   k6NotFoundMessage,
   resolveK6,
   runGeneratedTest,
 } from "./run.js";
+import {
+  buildResultsFile,
+  formatSummary,
+  formatUnexpectedError,
+  formatWarnings,
+  outcomeForK6ExitCode,
+  resolveResultsPath,
+  WARNING_PREFIX,
+  writeResultsFile,
+} from "./results.js";
 import { writeEmittedScript } from "./script/emit.js";
 import {
   SpecError,
@@ -28,6 +39,24 @@ function readVersion(): string {
     version: string;
   };
   return manifest.version;
+}
+
+/**
+ * Emit non-fatal warnings to stderr, prefixed `warning:` (SPEC-8, A6). These are
+ * unresolved-`${ENV_VAR}` references collected by config loading and auth
+ * injection; they never fail validation or change a successful exit code, and
+ * they are never written into the results JSON.
+ *
+ * A single shared `seen` set spans every call, so a variable left unresolved by
+ * both the config loader and the auth injector is reported exactly once.
+ */
+const seenWarnings = new Set<string>();
+
+function writeWarnings(warnings: readonly string[]): void {
+  const text = formatWarnings(warnings, seenWarnings);
+  if (text !== "") {
+    process.stderr.write(text);
+  }
 }
 
 /**
@@ -51,7 +80,7 @@ function selectOperations(
     const operation = catalog.get(`${method} ${path}`);
     if (operation === undefined) {
       process.stderr.write(
-        `Warning: operation "${method} ${path}" is not present in the loaded spec(s); skipping.\n`,
+        `${WARNING_PREFIX} operation "${method} ${path}" is not present in the loaded spec(s); skipping.\n`,
       );
       continue;
     }
@@ -65,13 +94,15 @@ function selectOperations(
  *
  * Loads and validates the config named by `--config`, resolves the spec(s),
  * then runs the SPEC-7 execution stage: preflight k6, generate + emit the k6
- * script (SPEC-4/5/6), and execute it (SPEC-7). The results summary, JSON
- * results file, and final exit-code policy are owned by SPEC-8.
+ * script (SPEC-4/5/6), and execute it (SPEC-7). Afterwards it owns the SPEC-8
+ * results stage: build + write the JSON results file, print the console
+ * summary, and return the documented exit code (0 success / 1 k6 run failure /
+ * 2 SpecWeaver error).
  */
 async function run(options: CliOptions): Promise<number> {
   if (options.config === undefined) {
     process.stderr.write(`Missing required --config <path>\n\n${USAGE}\n`);
-    return 1;
+    return EXIT_SPECWEAVER_ERROR;
   }
 
   let result: ConfigResult;
@@ -84,12 +115,15 @@ async function run(options: CliOptions): Promise<number> {
   } catch (error) {
     if (error instanceof ConfigError) {
       process.stderr.write(`${error.message}\n`);
-      return 1;
+      return EXIT_SPECWEAVER_ERROR;
     }
     throw error;
   }
 
   const { config } = result;
+  // A6: unresolved-`${ENV_VAR}` warnings are non-fatal and go to stderr.
+  writeWarnings(result.warnings);
+
   const specCount = config.specs?.length ?? 0;
   process.stdout.write(
     `Loaded config: ${config.operations.length} operation(s), ${specCount} spec source(s).\n`,
@@ -108,7 +142,7 @@ async function run(options: CliOptions): Promise<number> {
     } catch (error) {
       if (error instanceof SpecError) {
         process.stderr.write(`${error.message}\n`);
-        return 1;
+        return EXIT_SPECWEAVER_ERROR;
       }
       throw error;
     }
@@ -134,18 +168,24 @@ async function run(options: CliOptions): Promise<number> {
   }
 
   // SPEC-7 preflight: k6 must resolve on PATH before we execute anything. It is
-  // assumed pre-installed; SpecWeaver never auto-installs it.
+  // assumed pre-installed; SpecWeaver never auto-installs it. A missing k6 is a
+  // SpecWeaver-level error (SPEC-8 A5: folded into code 2).
   const k6Path = resolveK6();
   if (k6Path === undefined) {
     process.stderr.write(`${k6NotFoundMessage()}\n`);
-    return EXIT_PREFLIGHT_FAILURE;
+    return EXIT_SPECWEAVER_ERROR;
   }
   process.stdout.write(`k6 found: ${k6Path}\n`);
 
   // Generate the request data (SPEC-4), inject static auth (SPEC-5), and write
   // the generated k6 script + data to the shared specweaver temp location
   // (SPEC-6). SPEC-7 then executes that script.
-  const { requests } = injectAuth(config, generateAllRequestData(selected));
+  const { requests, warnings: authWarnings } = injectAuth(
+    config,
+    generateAllRequestData(selected),
+  );
+  writeWarnings(authWarnings);
+
   const written = writeEmittedScript({
     config,
     specs: loadedSpecs,
@@ -153,13 +193,45 @@ async function run(options: CliOptions): Promise<number> {
   });
   process.stdout.write(`Generated k6 script: ${written.scriptPath}\n`);
 
+  // SPEC-8 A1/A2: `--out` wins, then the config `output` field, then the
+  // documented default (`specweaver-results.json` in the cwd).
+  const resultsPath = resolve(
+    resolveResultsPath({ out: options.out, output: config.output }),
+  );
+
   try {
     const runResult = await runGeneratedTest({
       command: k6Path,
       scriptPath: written.scriptPath,
       vus: config.load.vus,
       duration: config.load.duration,
+      // A3: capture k6's raw NDJSON alongside SPEC-7's live streaming.
+      captureResults: true,
     });
+
+    // A results file is produced for both successful and k6-failed runs, as
+    // long as k6 actually ran.
+    const resultsFile = buildResultsFile({
+      version: readVersion(),
+      vus: config.load.vus,
+      duration: config.load.duration,
+      k6ExitCode: runResult.k6ExitCode,
+      outcome: outcomeForK6ExitCode(runResult.k6ExitCode),
+      operations: written.data.operations,
+      rawK6Results: runResult.rawResults,
+      resultsFile: resultsPath,
+    });
+
+    try {
+      writeResultsFile(resultsFile);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      process.stderr.write(
+        `error: failed to write results file "${resultsPath}": ${reason}\n`,
+      );
+      return EXIT_SPECWEAVER_ERROR;
+    }
+
     if (runResult.exitCode !== EXIT_SUCCESS) {
       const reason =
         runResult.k6ExitCode === null
@@ -167,42 +239,66 @@ async function run(options: CliOptions): Promise<number> {
           : `exit code ${runResult.k6ExitCode}`;
       process.stderr.write(`k6 run failed (${reason}).\n`);
     }
+
+    // A7: printed once, after k6 exits, so it never interleaves with the
+    // live-streamed k6 output.
+    process.stdout.write(formatSummary(resultsFile));
     return runResult.exitCode;
   } catch (error) {
     if (error instanceof K6SpawnError) {
       process.stderr.write(`${error.message}\n`);
-      return EXIT_PREFLIGHT_FAILURE;
+      return EXIT_SPECWEAVER_ERROR;
     }
     throw error;
   }
 }
 
-/** Parse `argv`, handle `--help`/`--version`/usage errors, and dispatch to `run`. */
+/**
+ * Parse `argv`, handle `--help`/`--version`/usage errors, and dispatch to
+ * `run`.
+ *
+ * This is the AC10 catch-all: any error that is not one of the deliberately
+ * handled SpecWeaver errors (config/spec/preflight/spawn) is an unexpected
+ * internal error. Rather than let it escape as an unhandled rejection (which
+ * would print a raw Node stack trace and exit `1`, colliding with
+ * {@link EXIT_K6_RUN_FAILURE}), it is reported cleanly and mapped to
+ * {@link EXIT_SPECWEAVER_ERROR}. The dedicated 0/1/2 paths are unchanged.
+ */
 export async function main(argv: string[]): Promise<number> {
+  try {
+    return await dispatch(argv);
+  } catch (error) {
+    process.stderr.write(`${formatUnexpectedError(error)}\n`);
+    return EXIT_SPECWEAVER_ERROR;
+  }
+}
+
+/** The parsed/flags dispatch step; unexpected errors propagate to {@link main}. */
+async function dispatch(argv: string[]): Promise<number> {
   let options: CliOptions;
   try {
     options = parseArgs(argv);
   } catch (error) {
     if (error instanceof CliUsageError) {
       process.stderr.write(`${error.message}\n\n${USAGE}\n`);
-      return 1;
+      return EXIT_SPECWEAVER_ERROR;
     }
     throw error;
   }
 
   if (options.help) {
     process.stdout.write(`${USAGE}\n`);
-    return 0;
+    return EXIT_SUCCESS;
   }
 
   if (options.version) {
     process.stdout.write(`${readVersion()}\n`);
-    return 0;
+    return EXIT_SUCCESS;
   }
 
   if (argv.length === 0) {
     process.stderr.write(`${USAGE}\n`);
-    return 1;
+    return EXIT_SPECWEAVER_ERROR;
   }
 
   return run(options);

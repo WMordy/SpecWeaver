@@ -2,3 +2,5 @@ node_modules/
 dist/
 *.log
 .DS_Store
+# Default SpecWeaver results file (see README)
+specweaver-results.json

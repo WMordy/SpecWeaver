@@ -34,47 +34,46 @@
  *    {@link mapK6ExitCode} rather than passing it through literally. A zero k6
  *    exit maps to {@link EXIT_SUCCESS}; a non-zero k6 exit maps to the
  *    k6-run-failure code; a SpecWeaver-level preflight/spawn error carries the
- *    distinct {@link EXIT_PREFLIGHT_FAILURE}.
+ *    distinct {@link EXIT_SPECWEAVER_ERROR}.
+ * 8. **Result capture (SPEC-8):** when `captureResults` is set, the extra k6
+ *    flag `--out json=<tempfile>` is passed so k6 writes its raw NDJSON metrics
+ *    to a sibling temp file, which is read back into
+ *    {@link K6RunResult.rawResults} for SPEC-8 to summarise. Streaming
+ *    (`stdio: 'inherit'`) is untouched, so the capture never buffers, replaces,
+ *    or reorders the live console output.
  *
  * ## What this module does NOT do
  *
  * - It never installs, downloads, or bundles k6 (assumed pre-installed).
  * - It does not generate the script (SPEC-6) or the payload data (SPEC-4).
- * - It does not produce the results summary / JSON results file or own the
- *   final SpecWeaver exit-code numbering — SPEC-8 owns that; the codes exported
- *   here are the provisional contract SPEC-7 forwards to.
+ * - It does not produce the results summary / JSON results file — SPEC-8 owns
+ *   that; this module only captures k6's exit code and raw metrics. The exit
+ *   codes are the SPEC-8 policy (A5: 0 / 1 / 2).
  */
 import { spawn, type SpawnOptions, type StdioOptions } from "node:child_process";
-import { rmSync, statSync } from "node:fs";
+import { readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
+import {
+  EXIT_K6_RUN_FAILURE,
+  EXIT_SPECWEAVER_ERROR,
+  EXIT_SUCCESS,
+  K6_RAW_RESULTS_FILE_NAME,
+} from "./results.js";
 import { DATA_FILE_NAME, SCRIPT_FILE_NAME } from "./script/emit.js";
 
-/**
- * SpecWeaver exit code for a successful run (zero k6 exit).
- *
- * Provisional: SPEC-8 owns the final SpecWeaver exit-code namespace; SPEC-7
- * only forwards k6's outcome through {@link mapK6ExitCode}.
- */
-export const EXIT_SUCCESS = 0;
-
-/**
- * SpecWeaver exit code for a k6 run that finished but exited non-zero
- * (a script/run failure).
- *
- * Provisional: SPEC-8 owns the final SpecWeaver exit-code numbering.
- */
-export const EXIT_K6_RUN_FAILURE = 3;
+export { EXIT_K6_RUN_FAILURE, EXIT_SPECWEAVER_ERROR, EXIT_SUCCESS };
 
 /**
  * SpecWeaver exit code for a SpecWeaver-level error around the run — k6 missing
  * on PATH, or a spawn-level failure (e.g. the binary is present but not
  * executable).
  *
- * Provisional: SPEC-8 owns the final SpecWeaver exit-code numbering.
+ * @deprecated SPEC-8 (A5) folds preflight/spawn failures into the single
+ * {@link EXIT_SPECWEAVER_ERROR} code; kept as an alias for existing callers.
  */
-export const EXIT_PREFLIGHT_FAILURE = 4;
+export const EXIT_PREFLIGHT_FAILURE = EXIT_SPECWEAVER_ERROR;
 
 /** Official k6 installation instructions, surfaced when k6 cannot be found. */
 export const K6_INSTALL_URL =
@@ -172,11 +171,19 @@ export function generatedDataPath(directory: string = tmpdir()): string {
 }
 
 /**
+ * Absolute path of the raw k6 metrics file under `directory` (SPEC-8, A3). k6
+ * writes its NDJSON here via `--out json=<file>`; SPEC-8 reads it after the run.
+ */
+export function rawResultsPath(directory: string = tmpdir()): string {
+  return join(directory, K6_RAW_RESULTS_FILE_NAME);
+}
+
+/**
  * Map k6's exit outcome onto SpecWeaver's exit code (decision 7).
  *
  * Deliberately not a literal passthrough: a zero k6 exit is success, any other
  * k6 outcome (non-zero exit, or termination by a signal) is the
- * k6-run-failure code. SPEC-8 owns the final numbering and may refine this.
+ * k6-run-failure code. SPEC-8 owns the final numbering (A5: 0 / 1 / 2).
  */
 export function mapK6ExitCode(
   k6ExitCode: number | null,
@@ -214,6 +221,13 @@ export interface K6RunOptions {
   env?: NodeJS.ProcessEnv;
   /** Keep the temp script/data after the run (opt-out of delete-after-run). */
   keepTemp?: boolean;
+  /**
+   * Capture k6's raw NDJSON metrics via `--out json=<tempfile>` (SPEC-8, A3).
+   * Defaults to `false`. When enabled, the file is read into
+   * {@link K6RunResult.rawResults} after k6 exits and then cleaned up with the
+   * other temp artifacts.
+   */
+  captureResults?: boolean;
   /** Injectable spawn implementation (production uses `node:child_process`). */
   spawn?: typeof spawn;
 }
@@ -230,6 +244,12 @@ export interface K6RunResult {
   k6Path: string;
   /** The generated script that was executed. */
   scriptPath: string;
+  /**
+   * The raw NDJSON k6 wrote to its `--out json=<file>` capture, when
+   * {@link K6RunOptions.captureResults} was set. `undefined` otherwise, or when
+   * k6 produced no capture file.
+   */
+  rawResults?: string;
 }
 
 /** Build the `k6 run` argument vector, passing the configured load profile. */
@@ -237,6 +257,7 @@ function buildK6Args(
   scriptPath: string,
   vus: number | undefined,
   duration: string | undefined,
+  resultsPath: string | undefined,
 ): string[] {
   const args = ["run"];
   if (vus !== undefined) {
@@ -244,6 +265,10 @@ function buildK6Args(
   }
   if (duration !== undefined) {
     args.push("--duration", duration);
+  }
+  if (resultsPath !== undefined) {
+    // SPEC-8 (A3): capture raw NDJSON metrics alongside the live stream.
+    args.push("--out", `json=${resultsPath}`);
   }
   args.push(scriptPath);
   return args;
@@ -264,6 +289,7 @@ function removeGeneratedArtifacts(directory: string): void {
   for (const path of [
     generatedScriptPath(directory),
     generatedDataPath(directory),
+    rawResultsPath(directory),
   ]) {
     try {
       rmSync(path, { force: true });
@@ -308,10 +334,16 @@ export function spawnErrorMessage(command: string, error: unknown): string {
  * Execute the generated k6 script, streaming k6's output live and mapping its
  * exit code onto SpecWeaver's policy.
  *
- * The generated temp script/data are removed afterwards unless the keep-temp
- * opt-out is set (decision 2). A missing k6 throws {@link K6NotFoundError}; a
- * spawn-level failure throws {@link K6SpawnError}; a non-zero k6 exit is a
- * normal result whose {@link K6RunResult.exitCode} is the k6-run-failure code.
+ * The generated temp script/data (and the raw metrics capture, when requested)
+ * are removed afterwards unless the keep-temp opt-out is set (decision 2). A
+ * missing k6 throws {@link K6NotFoundError}; a spawn-level failure throws
+ * {@link K6SpawnError}; a non-zero k6 exit is a normal result whose
+ * {@link K6RunResult.exitCode} is the k6-run-failure code.
+ *
+ * When {@link K6RunOptions.captureResults} is set, `--out json=<tempfile>` is
+ * added to the k6 invocation and the file is read into
+ * {@link K6RunResult.rawResults} before cleanup (SPEC-8, A3). The live
+ * `stdio: 'inherit'` stream is unaffected.
  */
 export async function runGeneratedTest(
   options: K6RunOptions = {},
@@ -323,7 +355,10 @@ export async function runGeneratedTest(
     throw new K6NotFoundError();
   }
 
-  const args = buildK6Args(scriptPath, options.vus, options.duration);
+  const capturePath = options.captureResults
+    ? rawResultsPath(directory)
+    : undefined;
+  const args = buildK6Args(scriptPath, options.vus, options.duration, capturePath);
   const spawnImpl = options.spawn ?? spawn;
   const spawnOptions: SpawnOptions = {
     stdio: options.stdio ?? "inherit",
@@ -339,16 +374,30 @@ export async function runGeneratedTest(
       args,
       spawnOptions,
     );
-    return {
+    const result: K6RunResult = {
       exitCode: mapK6ExitCode(code, signal),
       k6ExitCode: code,
       signal,
       k6Path: command,
       scriptPath,
     };
+    if (capturePath !== undefined) {
+      // Read before the finally-block cleanup removes the temp artifacts.
+      result.rawResults = readRawResults(capturePath);
+    }
+    return result;
   } finally {
     if (!keepTemp) {
       removeGeneratedArtifacts(directory);
     }
+  }
+}
+
+/** Read the raw k6 capture file, tolerating a missing/unreadable file. */
+function readRawResults(path: string): string | undefined {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return undefined;
   }
 }

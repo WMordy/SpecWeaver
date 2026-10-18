@@ -53,7 +53,15 @@ export interface LoadConfig {
   duration: string;
 }
 
-/** Static auth values. `${ENV_VAR}` references are interpolated at load time. */
+/**
+ * Static auth values. `${ENV_VAR}` references are interpolated at load time.
+ *
+ * There is no dedicated `apiKey` field: an API key is expressed as a static
+ * header in {@link AuthConfig.headers}, whose key is the configurable header
+ * name (e.g. `headers: { "X-Api-Key": "..." }`). A `token` produces
+ * `Authorization: Bearer <token>` and, when set, wins over an `authorization`
+ * entry in `headers` (case-insensitive). See `auth.ts` (SPEC-5).
+ */
 export interface AuthConfig {
   /** Bearer/API token value. */
   token?: string;

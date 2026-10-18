@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 
 import { CliUsageError, USAGE, parseArgs, type CliOptions } from "./args.js";
+import { ConfigError, loadConfig, type ConfigResult } from "./config.js";
 
 /** Read the version string from the package manifest. */
 function readVersion(): string {
@@ -15,14 +16,40 @@ function readVersion(): string {
 /**
  * Command handler.
  *
- * SPEC-1 only provides the CLI shell; no SpecWeaver behaviour (config loading,
- * payload generation, k6 execution) is implemented here yet. Later tickets
- * consume `options` from this entry point.
+ * Loads and validates the config named by `--config`, merging the CLI
+ * overrides. Later tickets (SPEC-3 onwards) consume the resulting `Config`.
  */
-function run(_options: CliOptions): number {
+function run(options: CliOptions): number {
+  if (options.config === undefined) {
+    process.stderr.write(`Missing required --config <path>\n\n${USAGE}\n`);
+    return 1;
+  }
+
+  let result: ConfigResult;
+  try {
+    result = loadConfig(options.config, {
+      vus: options.vus,
+      duration: options.duration,
+      out: options.out,
+    });
+  } catch (error) {
+    if (error instanceof ConfigError) {
+      process.stderr.write(`${error.message}\n`);
+      return 1;
+    }
+    throw error;
+  }
+
+  const { config } = result;
+  const specCount = config.specs?.length ?? 0;
   process.stdout.write(
-    "SpecWeaver CLI scaffold: no command behaviour is implemented yet.\n",
+    `Loaded config: ${config.operations.length} operation(s), ${specCount} spec source(s).\n`,
   );
+  process.stdout.write(
+    `Load profile: ${config.load.vus} virtual user(s) for ${config.load.duration}.\n`,
+  );
+  // `result.warnings` holds any unresolved-`${ENV_VAR}` warnings collected
+  // while loading; where they are surfaced is owned by SPEC-8.
   return 0;
 }
 

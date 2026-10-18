@@ -1,0 +1,289 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+import {
+  ConfigError,
+  DEFAULT_LOAD,
+  HTTP_METHODS,
+  loadConfig,
+  parseConfig,
+} from "../dist/config.js";
+
+const VALID_CONFIG = `specs:
+  - ./openapi.yaml
+operations:
+  - method: GET
+    path: /pets
+  - method: POST
+    path: /pets
+auth:
+  token: token-123
+  headers:
+    X-Api-Key: key-456
+output: results.json
+load:
+  vus: 5
+  duration: 1m
+`;
+
+test("valid config parses into a typed Config object", () => {
+  const { config, warnings } = parseConfig(VALID_CONFIG);
+
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(config.specs, ["./openapi.yaml"]);
+  assert.deepEqual(config.operations, [
+    { method: "GET", path: "/pets" },
+    { method: "POST", path: "/pets" },
+  ]);
+  assert.deepEqual(config.auth, {
+    token: "token-123",
+    headers: { "X-Api-Key": "key-456" },
+  });
+  assert.equal(config.output, "results.json");
+  assert.deepEqual(config.load, { vus: 5, duration: "1m" });
+});
+
+test("operations entries are normalized to the pinned { method, path } shape", () => {
+  const { config } = parseConfig(
+    "operations:\n  - method: get\n    path: /pets\n",
+  );
+  assert.deepEqual(config.operations, [{ method: "GET", path: "/pets" }]);
+  // No stray properties leak into the operation object.
+  assert.deepEqual(Object.keys(config.operations[0]), ["method", "path"]);
+});
+
+test("specs is optional and its absence does not fail validation", () => {
+  const { config } = parseConfig("operations:\n  - method: GET\n    path: /pets\n");
+  assert.equal(config.specs, undefined);
+  assert.deepEqual(config.operations, [{ method: "GET", path: "/pets" }]);
+});
+
+test("specs accepts a single string as well as a list", () => {
+  const single = parseConfig(
+    "specs: ./openapi.yaml\noperations:\n  - method: GET\n    path: /pets\n",
+  );
+  assert.deepEqual(single.config.specs, ["./openapi.yaml"]);
+});
+
+test("missing operations fails validation with a clear error", () => {
+  assert.throws(
+    () => parseConfig("specs: ./openapi.yaml\n"),
+    (error) => {
+      assert.ok(error instanceof ConfigError);
+      assert.match(error.message, /`operations` is required/);
+      return true;
+    },
+  );
+});
+
+test("empty operations list fails validation", () => {
+  assert.throws(() => parseConfig("operations: []\n"), /at least one operation/);
+});
+
+test("operations entry that is not the pinned object shape fails validation", () => {
+  assert.throws(
+    () => parseConfig("operations:\n  - GET /pets\n"),
+    /operations\[0\].*must be a mapping/,
+  );
+  assert.throws(
+    () => parseConfig("operations:\n  - method: GET\n"),
+    /operations\[0\]\.path.*non-empty string/,
+  );
+  assert.throws(
+    () => parseConfig("operations:\n  - method: GET\n    path: /pets\n    extra: nope\n"),
+    /unknown field `operations\[0\]\.extra`/,
+  );
+});
+
+test("an operation method outside the allowed set fails validation", () => {
+  assert.throws(
+    () => parseConfig("operations:\n  - method: FETCH\n    path: /pets\n"),
+    /operations\[0\]\.method.*must be one of/,
+  );
+});
+
+test("a duplicate operation (same method + path) fails validation", () => {
+  const yaml = `operations:
+  - method: GET
+    path: /pets
+  - method: get
+    path: /pets
+`;
+  assert.throws(() => parseConfig(yaml), /duplicate operation `GET \/pets`/);
+});
+
+test("invalid YAML produces a human-readable ConfigError", () => {
+  assert.throws(
+    () => parseConfig("operations: [\n", {}, "specweaver.yaml"),
+    (error) => {
+      assert.ok(error instanceof ConfigError);
+      assert.match(error.message, /Invalid YAML in "specweaver.yaml"/);
+      return true;
+    },
+  );
+});
+
+test("a non-mapping root document fails validation", () => {
+  assert.throws(() => parseConfig("just a string\n"), /YAML mapping/);
+  assert.throws(() => parseConfig("- one\n- two\n"), /YAML mapping/);
+});
+
+test("all validation errors are aggregated, not reported one at a time", () => {
+  const yaml = `load:
+  vus: 0
+operations:
+  - method: NOPE
+    path: ""
+`;
+  assert.throws(
+    () => parseConfig(yaml),
+    (error) => {
+      assert.ok(error instanceof ConfigError);
+      assert.ok(error.errors.length >= 3, "expected multiple aggregated errors");
+      assert.match(error.message, /`load\.vus` must be a positive integer/);
+      assert.match(error.message, /operations\[0\]\.method/);
+      assert.match(error.message, /operations\[0\]\.path/);
+      return true;
+    },
+  );
+});
+
+test("documented defaults are applied when optional fields are omitted", () => {
+  const { config } = parseConfig("operations:\n  - method: GET\n    path: /pets\n");
+  assert.deepEqual(config.load, DEFAULT_LOAD);
+  // The default output path is deliberately not pinned here (owned by SPEC-7).
+  assert.equal(config.output, undefined);
+  assert.equal(config.auth, undefined);
+  assert.equal(config.payloads, undefined);
+});
+
+test("partial load overrides only the omitted default field", () => {
+  const { config } = parseConfig(
+    "operations:\n  - method: GET\n    path: /pets\nload:\n  vus: 7\n",
+  );
+  assert.deepEqual(config.load, { vus: 7, duration: DEFAULT_LOAD.duration });
+});
+
+test("CLI overrides take precedence over YAML values", () => {
+  const { config } = parseConfig(VALID_CONFIG, {
+    vus: 42,
+    duration: "2m",
+    out: "cli-results.json",
+  });
+  assert.deepEqual(config.load, { vus: 42, duration: "2m" });
+  assert.equal(config.output, "cli-results.json");
+});
+
+test("absent CLI overrides leave YAML values intact", () => {
+  const { config } = parseConfig(VALID_CONFIG, {});
+  assert.deepEqual(config.load, { vus: 5, duration: "1m" });
+  assert.equal(config.output, "results.json");
+});
+
+test("absent CLI overrides leave defaults intact", () => {
+  const { config } = parseConfig(
+    "operations:\n  - method: GET\n    path: /pets\n",
+    {},
+  );
+  assert.deepEqual(config.load, DEFAULT_LOAD);
+});
+
+test("invalid load values fail validation", () => {
+  assert.throws(
+    () => parseConfig("operations:\n  - method: GET\n    path: /pets\nload:\n  duration: soon\n"),
+    /`load\.duration`/,
+  );
+  assert.throws(
+    () => parseConfig("operations:\n  - method: GET\n    path: /pets\nload:\n  vus: -1\n"),
+    /`load\.vus`/,
+  );
+});
+
+test("unknown fields are rejected", () => {
+  assert.throws(
+    () => parseConfig("operations:\n  - method: GET\n    path: /pets\nbogus: true\n"),
+    /unknown field `bogus`/,
+  );
+});
+
+test("auth ${ENV_VAR} references are resolved from the process environment", () => {
+  const previous = process.env.SPECWEAVER_TEST_TOKEN;
+  process.env.SPECWEAVER_TEST_TOKEN = "super-secret";
+  try {
+    const { config, warnings } = parseConfig(
+      `operations:
+  - method: GET
+    path: /pets
+auth:
+  token: "\${SPECWEAVER_TEST_TOKEN}"
+  headers:
+    Authorization: "Bearer \${SPECWEAVER_TEST_TOKEN}"
+`,
+    );
+    assert.deepEqual(warnings, []);
+    assert.equal(config.auth.token, "super-secret");
+    assert.equal(config.auth.headers.Authorization, "Bearer super-secret");
+  } finally {
+    if (previous === undefined) {
+      delete process.env.SPECWEAVER_TEST_TOKEN;
+    } else {
+      process.env.SPECWEAVER_TEST_TOKEN = previous;
+    }
+  }
+});
+
+test("an unresolved ${ENV_VAR} emits a warning without failing validation", () => {
+  delete process.env.SPECWEAVER_MISSING_TOKEN;
+  const { config, warnings } = parseConfig(
+    `operations:
+  - method: GET
+    path: /pets
+auth:
+  token: "\${SPECWEAVER_MISSING_TOKEN}"
+`,
+  );
+
+  assert.equal(config.auth.token, "${SPECWEAVER_MISSING_TOKEN}");
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /unresolved environment variable "SPECWEAVER_MISSING_TOKEN"/);
+  assert.match(warnings[0], /auth\.token/);
+});
+
+test("HTTP method allow-list matches the documented set", () => {
+  for (const method of HTTP_METHODS) {
+    const { config } = parseConfig(`operations:\n  - method: ${method}\n    path: /x\n`);
+    assert.equal(config.operations[0].method, method);
+  }
+});
+
+test("loadConfig reads and parses a YAML file from disk", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-config-"));
+  const path = join(dir, "specweaver.yaml");
+  writeFileSync(path, "operations:\n  - method: GET\n    path: /pets\n");
+
+  const { config } = loadConfig(path, { vus: 3 });
+  assert.deepEqual(config.operations, [{ method: "GET", path: "/pets" }]);
+  assert.equal(config.load.vus, 3);
+});
+
+test("loadConfig reports a missing file as a ConfigError", () => {
+  const missing = join(tmpdir(), "specweaver-does-not-exist.yaml");
+  assert.throws(
+    () => loadConfig(missing),
+    (error) => {
+      assert.ok(error instanceof ConfigError);
+      assert.match(error.message, /Cannot read config file/);
+      return true;
+    },
+  );
+});
+
+test("schema violations reported by loadConfig name the config file", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-config-"));
+  const path = join(dir, "bad.yaml");
+  writeFileSync(path, "operations: []\n");
+  assert.throws(() => loadConfig(path), new RegExp(`Invalid config in "${path}"`));
+});

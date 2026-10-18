@@ -1,0 +1,507 @@
+/**
+ * SpecWeaver config loading and validation (SPEC-2).
+ *
+ * Reads the YAML file named by `--config <path>`, validates it against the
+ * SpecWeaver schema, applies documented defaults, merges CLI overrides, and
+ * resolves `${ENV_VAR}` references in auth fields. The single validated
+ * {@link Config} object it produces is consumed by every downstream ticket
+ * (SPEC-3 spec loading, SPEC-4 payloads, SPEC-5 auth, SPEC-6 script emission,
+ * SPEC-7/8 execution and results).
+ *
+ * Config input is YAML only. JSON/TOML input and config-file discovery are
+ * intentionally not supported.
+ *
+ * Schema:
+ *
+ * ```yaml
+ * specs:                      # OPTIONAL, string or list of strings
+ *   - ./openapi.yaml
+ * operations:                 # REQUIRED, non-empty list of { method, path }
+ *   - method: GET
+ *     path: /pets
+ * auth:                       # OPTIONAL, static token/headers (env-referenceable)
+ *   token: "${API_TOKEN}"
+ *   headers:
+ *     X-Api-Key: "${API_KEY}"
+ * payloads:                   # OPTIONAL, per-operation payload overrides (SPEC-4)
+ *   - method: POST
+ *     path: /pets
+ *     body: { name: "Fido" }
+ * output: results.json        # OPTIONAL, results file path (default owned by SPEC-7)
+ * load:                       # OPTIONAL, default vus/duration
+ *   vus: 10
+ *   duration: 30s
+ * ```
+ */
+import { readFileSync } from "node:fs";
+
+import { parse as parseYaml } from "yaml";
+
+/** A single opt-in operation. `method` + `path` jointly key the operation. */
+export interface OperationConfig {
+  /** Upper-cased HTTP method, e.g. `GET`. */
+  method: string;
+  /** OpenAPI path, e.g. `/pets`. */
+  path: string;
+}
+
+/** The load profile applied when the operations run. */
+export interface LoadConfig {
+  /** Number of virtual users. */
+  vus: number;
+  /** k6-style duration, e.g. `30s` or `1m30s`. */
+  duration: string;
+}
+
+/** Static auth values. `${ENV_VAR}` references are interpolated at load time. */
+export interface AuthConfig {
+  /** Bearer/API token value. */
+  token?: string;
+  /** Static request headers. */
+  headers?: Record<string, string>;
+}
+
+/**
+ * Per-operation payload override, keyed by `method` + `path`.
+ *
+ * `data` holds the override fields (e.g. a `body`); their interpretation is
+ * owned by SPEC-4 and is not enforced here.
+ */
+export interface PayloadOverride {
+  method: string;
+  path: string;
+  data: Record<string, unknown>;
+}
+
+/**
+ * Fully validated, defaulted config handed to downstream tickets.
+ *
+ * This is the single typed contract for the whole CLI: it contains no `any`.
+ */
+export interface Config {
+  /** OpenAPI source path(s)/URL(s). Absent when the config omits `specs`. */
+  specs?: string[];
+  /** Opt-in operations. Never empty for a validated config. */
+  operations: OperationConfig[];
+  /** Static auth, with `${ENV_VAR}` references already resolved. */
+  auth?: AuthConfig;
+  /** Per-operation payload overrides (consumed by SPEC-4). */
+  payloads?: PayloadOverride[];
+  /** Results file path. The default is owned by SPEC-7. */
+  output?: string;
+  /** Resolved load profile (defaults applied). */
+  load: LoadConfig;
+}
+
+/** CLI values that take precedence over the corresponding YAML values. */
+export interface ConfigOverrides {
+  /** `--vus`, overrides `load.vus`. */
+  vus?: number;
+  /** `--duration`, overrides `load.duration`. */
+  duration?: string;
+  /** `--out`, overrides `output`. */
+  out?: string;
+}
+
+/** A successful load: the validated config plus any non-fatal warnings. */
+export interface ConfigResult {
+  config: Config;
+  /**
+   * Non-fatal warnings raised while loading (currently unresolved `${ENV_VAR}`
+   * references). Where these are surfaced is owned by SPEC-8 and is not
+   * pinned by SPEC-2.
+   */
+  warnings: string[];
+}
+
+/**
+ * Conservative default load profile applied when `load` (or one of its fields)
+ * is omitted. Kept low so an accidental run does not generate heavy load.
+ */
+export const DEFAULT_LOAD: LoadConfig = { vus: 1, duration: "30s" };
+
+/** HTTP methods accepted in `operations` (case-insensitive on input). */
+export const HTTP_METHODS = [
+  "GET",
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+  "HEAD",
+  "OPTIONS",
+] as const;
+
+const HTTP_METHOD_SET = new Set<string>(HTTP_METHODS);
+
+/** k6-style duration: one or more `<number><unit>` segments, unit in ms|s|m|h. */
+const DURATION_PATTERN = /^(?:\d+(?:\.\d+)?(?:ms|s|m|h))+$/;
+
+/** `${VAR}` reference; variable names are POSIX-ish identifiers. */
+const ENV_PATTERN = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+const ROOT_KEYS = new Set(["specs", "operations", "auth", "payloads", "output", "load"]);
+const LOAD_KEYS = new Set(["vus", "duration"]);
+const AUTH_KEYS = new Set(["token", "headers"]);
+
+/** Error thrown when the config cannot be read, parsed, or validated. */
+export class ConfigError extends Error {
+  /** Every individual problem detected (aggregated, not just the first). */
+  readonly errors: string[];
+
+  constructor(message: string, errors: string[] = []) {
+    super(message);
+    this.name = "ConfigError";
+    this.errors = errors.length > 0 ? errors : [message];
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function formatErrors(sourceName: string, errors: string[]): string {
+  const list = errors.map((error) => `  - ${error}`).join("\n");
+  return `Invalid config in "${sourceName}":\n${list}`;
+}
+
+/**
+ * Resolve `${ENV_VAR}` references from the process environment. Unresolved
+ * references are left intact and recorded as warnings (never errors).
+ */
+function interpolate(value: string, at: string, warnings: string[]): string {
+  return value.replace(ENV_PATTERN, (match, name: string): string => {
+    const resolved = process.env[name];
+    if (resolved === undefined) {
+      warnings.push(
+        `unresolved environment variable "${name}" referenced in \`${at}\``,
+      );
+      return match;
+    }
+    return resolved;
+  });
+}
+
+interface PartialLoad {
+  vus?: number;
+  duration?: string;
+}
+
+function validateOperations(value: unknown, errors: string[]): OperationConfig[] {
+  if (value === undefined || value === null) {
+    errors.push("`operations` is required and must list at least one `{ method, path }` entry");
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    errors.push("`operations` must be a list of `{ method, path }` entries");
+    return [];
+  }
+  if (value.length === 0) {
+    errors.push("`operations` must list at least one operation");
+    return [];
+  }
+
+  const operations: OperationConfig[] = [];
+  const seen = new Set<string>();
+
+  value.forEach((entry, index) => {
+    const at = `operations[${index}]`;
+    if (!isPlainObject(entry)) {
+      errors.push(`\`${at}\` must be a mapping with \`method\` and \`path\``);
+      return;
+    }
+
+    for (const key of Object.keys(entry)) {
+      if (key !== "method" && key !== "path") {
+        errors.push(`unknown field \`${at}.${key}\``);
+      }
+    }
+
+    const rawMethod = entry.method;
+    const rawPath = entry.path;
+    let valid = true;
+    let method = "";
+    let path = "";
+
+    if (typeof rawMethod !== "string" || rawMethod.trim() === "") {
+      errors.push(`\`${at}.method\` must be a non-empty string`);
+      valid = false;
+    } else if (!HTTP_METHOD_SET.has(rawMethod.toUpperCase())) {
+      errors.push(
+        `\`${at}.method\` must be one of ${HTTP_METHODS.join(", ")} (received "${rawMethod}")`,
+      );
+      valid = false;
+    } else {
+      method = rawMethod.toUpperCase();
+    }
+
+    if (typeof rawPath !== "string" || rawPath.trim() === "") {
+      errors.push(`\`${at}.path\` must be a non-empty string`);
+      valid = false;
+    } else {
+      path = rawPath;
+    }
+
+    if (!valid) {
+      return;
+    }
+
+    const id = `${method} ${path}`;
+    if (seen.has(id)) {
+      errors.push(`duplicate operation \`${id}\``);
+      return;
+    }
+    seen.add(id);
+    operations.push({ method, path });
+  });
+
+  return operations;
+}
+
+function validateSpecs(value: unknown, errors: string[]): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const isList = Array.isArray(value);
+  const entries: unknown[] = isList ? value : [value];
+  const specs: string[] = [];
+
+  entries.forEach((entry, index) => {
+    const at = isList ? `specs[${index}]` : "specs";
+    if (typeof entry !== "string" || entry.trim() === "") {
+      errors.push(`\`${at}\` must be a non-empty string`);
+      return;
+    }
+    specs.push(entry);
+  });
+
+  return specs.length > 0 ? specs : undefined;
+}
+
+function validateLoad(value: unknown, errors: string[]): PartialLoad {
+  const load: PartialLoad = {};
+  if (value === undefined) {
+    return load;
+  }
+  if (!isPlainObject(value)) {
+    errors.push("`load` must be a mapping with optional `vus` and `duration`");
+    return load;
+  }
+
+  for (const key of Object.keys(value)) {
+    if (!LOAD_KEYS.has(key)) {
+      errors.push(`unknown field \`load.${key}\``);
+    }
+  }
+
+  if ("vus" in value) {
+    const vus = value.vus;
+    if (typeof vus !== "number" || !Number.isInteger(vus) || vus <= 0) {
+      errors.push("`load.vus` must be a positive integer");
+    } else {
+      load.vus = vus;
+    }
+  }
+
+  if ("duration" in value) {
+    const duration = value.duration;
+    if (typeof duration !== "string" || !DURATION_PATTERN.test(duration)) {
+      errors.push('`load.duration` must be a k6-style duration such as "30s"');
+    } else {
+      load.duration = duration;
+    }
+  }
+
+  return load;
+}
+
+function validateAuth(
+  value: unknown,
+  errors: string[],
+  warnings: string[],
+): AuthConfig | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isPlainObject(value)) {
+    errors.push("`auth` must be a mapping with optional `token` and `headers`");
+    return undefined;
+  }
+
+  for (const key of Object.keys(value)) {
+    if (!AUTH_KEYS.has(key)) {
+      errors.push(`unknown field \`auth.${key}\``);
+    }
+  }
+
+  const auth: AuthConfig = {};
+
+  if ("token" in value && value.token !== undefined) {
+    if (typeof value.token !== "string") {
+      errors.push("`auth.token` must be a string");
+    } else {
+      auth.token = interpolate(value.token, "auth.token", warnings);
+    }
+  }
+
+  if ("headers" in value && value.headers !== undefined) {
+    const headers = value.headers;
+    if (!isPlainObject(headers)) {
+      errors.push("`auth.headers` must be a mapping of header names to string values");
+    } else {
+      const resolved: Record<string, string> = {};
+      for (const [name, headerValue] of Object.entries(headers)) {
+        if (typeof headerValue !== "string") {
+          errors.push(`\`auth.headers.${name}\` must be a string`);
+        } else {
+          resolved[name] = interpolate(headerValue, `auth.headers.${name}`, warnings);
+        }
+      }
+      auth.headers = resolved;
+    }
+  }
+
+  return auth;
+}
+
+function validatePayloads(value: unknown, errors: string[]): PayloadOverride[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    errors.push("`payloads` must be a list of per-operation overrides");
+    return undefined;
+  }
+
+  const payloads: PayloadOverride[] = [];
+
+  value.forEach((entry, index) => {
+    const at = `payloads[${index}]`;
+    if (!isPlainObject(entry)) {
+      errors.push(`\`${at}\` must be a mapping with \`method\` and \`path\``);
+      return;
+    }
+
+    const method = entry.method;
+    const path = entry.path;
+    if (typeof method !== "string" || method.trim() === "") {
+      errors.push(`\`${at}.method\` must be a non-empty string`);
+      return;
+    }
+    if (typeof path !== "string" || path.trim() === "") {
+      errors.push(`\`${at}.path\` must be a non-empty string`);
+      return;
+    }
+
+    const data: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(entry)) {
+      if (key !== "method" && key !== "path") {
+        data[key] = item;
+      }
+    }
+    payloads.push({ method: method.toUpperCase(), path, data });
+  });
+
+  return payloads;
+}
+
+function validateOutput(value: unknown, errors: string[]): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string" || value.trim() === "") {
+    errors.push("`output` must be a non-empty file path string");
+    return undefined;
+  }
+  return value;
+}
+
+/**
+ * Parse and validate YAML config text, returning a typed {@link Config}.
+ *
+ * @param source Raw YAML text.
+ * @param overrides CLI values (`--vus`, `--duration`, `--out`) that take
+ *   precedence over YAML values. Assumed already validated by `parseArgs`.
+ * @param sourceName Name used in error messages (a file path, by default).
+ * @throws {ConfigError} on invalid YAML or any schema violation. All schema
+ *   violations are aggregated into a single error.
+ */
+export function parseConfig(
+  source: string,
+  overrides: ConfigOverrides = {},
+  sourceName = "<config>",
+): ConfigResult {
+  let document: unknown;
+  try {
+    document = parseYaml(source);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ConfigError(`Invalid YAML in "${sourceName}": ${reason}`);
+  }
+
+  const warnings: string[] = [];
+
+  if (!isPlainObject(document)) {
+    throw new ConfigError(
+      formatErrors(sourceName, [
+        "config must be a YAML mapping with an `operations` list",
+      ]),
+    );
+  }
+
+  const errors: string[] = [];
+
+  for (const key of Object.keys(document)) {
+    if (!ROOT_KEYS.has(key)) {
+      errors.push(`unknown field \`${key}\``);
+    }
+  }
+
+  const operations = validateOperations(document.operations, errors);
+  const specs = validateSpecs(document.specs, errors);
+  const rawLoad = validateLoad(document.load, errors);
+  const auth = validateAuth(document.auth, errors, warnings);
+  const payloads = validatePayloads(document.payloads, errors);
+  const output = validateOutput(document.output, errors);
+
+  if (errors.length > 0) {
+    throw new ConfigError(formatErrors(sourceName, errors), errors);
+  }
+
+  const config: Config = {
+    operations,
+    load: {
+      vus: overrides.vus ?? rawLoad.vus ?? DEFAULT_LOAD.vus,
+      duration: overrides.duration ?? rawLoad.duration ?? DEFAULT_LOAD.duration,
+    },
+    output: overrides.out ?? output,
+  };
+  if (specs !== undefined) {
+    config.specs = specs;
+  }
+  if (auth !== undefined) {
+    config.auth = auth;
+  }
+  if (payloads !== undefined) {
+    config.payloads = payloads;
+  }
+
+  return { config, warnings };
+}
+
+/**
+ * Read, parse, and validate the YAML config file at `path`.
+ *
+ * @throws {ConfigError} if the file cannot be read, or on any parse/validation
+ *   failure.
+ */
+export function loadConfig(path: string, overrides: ConfigOverrides = {}): ConfigResult {
+  let source: string;
+  try {
+    source = readFileSync(path, "utf8");
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ConfigError(`Cannot read config file "${path}": ${reason}`);
+  }
+  return parseConfig(source, overrides, path);
+}

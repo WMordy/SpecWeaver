@@ -68,6 +68,54 @@ test("specs accepts a single string as well as a list", () => {
   assert.deepEqual(single.config.specs, ["./openapi.yaml"]);
 });
 
+test("baseUrl is exposed on the typed Config when present and valid", () => {
+  const { config } = parseConfig(
+    "operations:\n  - method: GET\n    path: /pets\nbaseUrl: https://api.example.com\n",
+  );
+  assert.equal(config.baseUrl, "https://api.example.com");
+});
+
+test("baseUrl is optional and stays undefined when absent", () => {
+  const { config } = parseConfig("operations:\n  - method: GET\n    path: /pets\n");
+  assert.equal(config.baseUrl, undefined);
+});
+
+test("a non-string or empty baseUrl fails validation, naming the field", () => {
+  const message = /`baseUrl` must be a non-empty string/;
+  assert.throws(
+    () => parseConfig("operations:\n  - method: GET\n    path: /pets\nbaseUrl: 42\n"),
+    message,
+  );
+  assert.throws(
+    () => parseConfig('operations:\n  - method: GET\n    path: /pets\nbaseUrl: ""\n'),
+    message,
+  );
+  assert.throws(
+    () => parseConfig('operations:\n  - method: GET\n    path: /pets\nbaseUrl: "   "\n'),
+    message,
+  );
+});
+
+test("baseUrl errors are aggregated with the other schema violations", () => {
+  const yaml = `baseUrl: ""
+operations:
+  - method: GET
+    path: /pets
+load:
+  vus: 0
+`;
+  assert.throws(
+    () => parseConfig(yaml),
+    (error) => {
+      assert.ok(error instanceof ConfigError);
+      assert.ok(error.errors.length >= 2, "expected aggregated errors");
+      assert.match(error.message, /`baseUrl` must be a non-empty string/);
+      assert.match(error.message, /`load\.vus` must be a positive integer/);
+      return true;
+    },
+  );
+});
+
 test("missing operations fails validation with a clear error", () => {
   assert.throws(
     () => parseConfig("specs: ./openapi.yaml\n"),

@@ -20,12 +20,10 @@
  *
  * - **A1 / Base URL:** the request base URL is the config `baseUrl` override
  *   when present, otherwise the spec's first `servers[].url` (server-variable
- *   defaults substituted). The config field itself is owned by SPEC-2 / the
- *   follow-up SPEC-10; this module only *consumes* it (read defensively so it
- *   works the moment SPEC-10 exposes it on `Config`). **Deferred (2026-10-18):**
- *   the `baseUrl` config field and its validation remain owned entirely by
- *   SPEC-10 — SPEC-6 keeps this precedence logic exactly as-is and adds no
- *   validation for the field.
+ *   defaults substituted). The optional `baseUrl` field now exists on the
+ *   SPEC-2 `Config` (its validation was absorbed into SPEC-9 from the closed
+ *   SPEC-10, 2026-10-18); this module only *consumes* it, applying the
+ *   precedence above without re-validating the field.
  * - **A2 / Output location:** the script is `specweaver.generated.js` and its
  *   data is `specweaver.data.json`, both written under `os.tmpdir()` with a
  *   `specweaver` prefix — the SAME location SPEC-7 reads and executes. `--out`
@@ -63,8 +61,9 @@
  *    (this file). CLI wiring and orchestration (reading config, invoking
  *    SPEC-7/9) are explicitly owned by SPEC-7/9, not here. There is no CLI
  *    entry point in this ticket.
- * 2. **`baseUrl` field deferral.** The precedence logic of A1 is unchanged;
- *    the config field and its validation are deferred to SPEC-10.
+ * 2. **`baseUrl` field (absorbed into SPEC-9, 2026-10-18).** The precedence
+ *    logic of A1 is unchanged; the `baseUrl` field and its validation now live
+ *    in the SPEC-2 config schema, absorbed from the closed SPEC-10.
  * 3. **Wildcard `2XX`.** A documented `2XX`/`2xx` response is treated as *any*
  *    2xx status via a range check (`status >= 200 && status < 300`), rather
  *    than being normalized to exactly `200`. Literal codes are still matched
@@ -212,13 +211,12 @@ function isObject(value: unknown): value is JsonObject {
 /**
  * Read the config `baseUrl` override, if present.
  *
- * `baseUrl` is owned by the SPEC-2 config schema (validation tracked by the
- * follow-up SPEC-10); it is read defensively here so emission works the moment
- * the field is exposed on `Config`, without this module validating it.
+ * `baseUrl` is a validated, optional field on the SPEC-2 `Config` (validation
+ * absorbed into SPEC-9 from the closed SPEC-10, 2026-10-18); the emitter simply
+ * consumes it and defers validation to the config loader.
  */
 function configBaseUrl(config: Config): string | undefined {
-  const value = (config as { baseUrl?: unknown }).baseUrl;
-  return typeof value === "string" && value.trim() !== "" ? value : undefined;
+  return config.baseUrl;
 }
 
 /** Substitute a server's `{var}` placeholders with their variable defaults. */

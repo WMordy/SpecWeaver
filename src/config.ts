@@ -5,8 +5,9 @@
  * SpecWeaver schema, applies documented defaults, merges CLI overrides, and
  * resolves `${ENV_VAR}` references in auth fields. The single validated
  * {@link Config} object it produces is consumed by every downstream ticket
- * (SPEC-3 spec loading, SPEC-4 payloads, SPEC-5 auth, SPEC-6 script emission,
- * SPEC-7/8 execution and results).
+ * (SPEC-3 spec loading, SPEC-4 request-data generation, SPEC-5 auth, SPEC-6
+ * script emission, SPEC-7/8 execution and results). The `payloads` field is
+ * parsed and validated but is reserved/unused in v1.
  *
  * Config input is YAML only. JSON/TOML input and config-file discovery are
  * intentionally not supported.
@@ -19,11 +20,12 @@
  * operations:                 # REQUIRED, non-empty list of { method, path }
  *   - method: GET
  *     path: /pets
+ * baseUrl: https://api.example.com  # OPTIONAL, request base URL (overrides the spec's first servers[].url; consumed by SPEC-6)
  * auth:                       # OPTIONAL, static token/headers (env-referenceable)
  *   token: "${API_TOKEN}"
  *   headers:
  *     X-Api-Key: "${API_KEY}"
- * payloads:                   # OPTIONAL, per-operation payload overrides (SPEC-4)
+ * payloads:                   # OPTIONAL, per-operation payload overrides (reserved; unused in v1)
  *   - method: POST
  *     path: /pets
  *     body: { name: "Fido" }
@@ -72,8 +74,9 @@ export interface AuthConfig {
 /**
  * Per-operation payload override, keyed by `method` + `path`.
  *
- * `data` holds the override fields (e.g. a `body`); their interpretation is
- * owned by SPEC-4 and is not enforced here.
+ * `data` holds the override fields (e.g. a `body`). These overrides are parsed
+ * and validated but are **reserved/unused in v1**: no downstream ticket
+ * consumes them yet.
  */
 export interface PayloadOverride {
   method: string;
@@ -91,9 +94,18 @@ export interface Config {
   specs?: string[];
   /** Opt-in operations. Never empty for a validated config. */
   operations: OperationConfig[];
+  /**
+   * Optional request base URL. When present it overrides the spec's first
+   * `servers[].url` as the base for generated requests (consumed by SPEC-6);
+   * when absent the spec's `servers[].url` is used.
+   */
+  baseUrl?: string;
   /** Static auth, with `${ENV_VAR}` references already resolved. */
   auth?: AuthConfig;
-  /** Per-operation payload overrides (consumed by SPEC-4). */
+  /**
+   * Per-operation payload overrides. Parsed and validated but **reserved and
+   * currently unused in v1** (no downstream ticket consumes them yet).
+   */
   payloads?: PayloadOverride[];
   /**
    * Results file path — names ONLY the SPEC-8 results JSON (never the generated
@@ -151,7 +163,15 @@ const DURATION_PATTERN = /^(?:\d+(?:\.\d+)?(?:ms|s|m|h))+$/;
 /** `${VAR}` reference; variable names are POSIX-ish identifiers. */
 const ENV_PATTERN = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
-const ROOT_KEYS = new Set(["specs", "operations", "auth", "payloads", "output", "load"]);
+const ROOT_KEYS = new Set([
+  "specs",
+  "operations",
+  "baseUrl",
+  "auth",
+  "payloads",
+  "output",
+  "load",
+]);
 const LOAD_KEYS = new Set(["vus", "duration"]);
 const AUTH_KEYS = new Set(["token", "headers"]);
 
@@ -417,6 +437,17 @@ function validatePayloads(value: unknown, errors: string[]): PayloadOverride[] |
   return payloads;
 }
 
+function validateBaseUrl(value: unknown, errors: string[]): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string" || value.trim() === "") {
+    errors.push("`baseUrl` must be a non-empty string");
+    return undefined;
+  }
+  return value;
+}
+
 function validateOutput(value: unknown, errors: string[]): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -471,6 +502,7 @@ export function parseConfig(
 
   const operations = validateOperations(document.operations, errors);
   const specs = validateSpecs(document.specs, errors);
+  const baseUrl = validateBaseUrl(document.baseUrl, errors);
   const rawLoad = validateLoad(document.load, errors);
   const auth = validateAuth(document.auth, errors, warnings);
   const payloads = validatePayloads(document.payloads, errors);
@@ -490,6 +522,9 @@ export function parseConfig(
   };
   if (specs !== undefined) {
     config.specs = specs;
+  }
+  if (baseUrl !== undefined) {
+    config.baseUrl = baseUrl;
   }
   if (auth !== undefined) {
     config.auth = auth;

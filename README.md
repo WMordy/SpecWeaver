@@ -11,17 +11,60 @@ further setup.
 
 - Node.js >= 18
 - [k6](https://grafana.com/docs/k6/latest/set-up/install-k6/) installed and on
-  your `PATH`. SpecWeaver never installs k6 for you; if it cannot find the
-  binary it exits with a clear error.
+  your `PATH`.
+
+SpecWeaver never installs k6 for you. It PATH-checks for the `k6` binary before
+generating anything, and if it is missing it exits `2` with:
+
+```text
+k6 was not found on your PATH.
+SpecWeaver needs the k6 binary to run generated load tests and will not install it for you.
+Install k6 from https://grafana.com/docs/k6/latest/set-up/install-k6/ and make sure it is available on your PATH.
+```
 
 ## Install
 
+SpecWeaver is installed globally as the `specweaver` command:
+
 ```sh
+git clone <this repo> && cd <this repo>
 npm install
 npm run build
-npm install -g .
-# then:
-specweaver --config specweaver.yaml
+npm i -g .            # global install; exposes the `specweaver` command
+```
+
+Once published to the npm registry it can also be installed directly with
+`npm i -g specweaver`; the local `npm i -g .` above is the supported way to
+install this checkout.
+
+## Quick start
+
+The repository ships a runnable sample — `samples/petstore.openapi.json` and
+`samples/specweaver.config.yaml` — that exercises path parameters, query
+parameters, and a JSON request body. From the repository root:
+
+```sh
+# 1. run the sample load test (uses a literal token; no setup required)
+specweaver --config samples/specweaver.config.yaml
+
+# 2. a machine-readable summary is written next to the console output
+cat specweaver-results.json
+```
+
+To keep secrets out of the config, reference the environment instead
+(`token: "${API_TOKEN}"`); an unresolved `${ENV_VAR}` is a warning, not an
+error.
+
+> Relative `specs` paths are resolved against the **current working
+> directory**, so run the sample from the repository root (where `samples/`
+> lives). `--config`, `--out`, and the `specs` entries are all ordinary paths
+> resolved the same way.
+
+The `--vus`, `--duration`, and `--out` flags override the sample's values, e.g.
+a quick smoke run:
+
+```sh
+specweaver --config samples/specweaver.config.yaml --vus 1 --duration 2s --out /tmp/results.json
 ```
 
 ## Usage
@@ -49,6 +92,7 @@ specs:                      # OPTIONAL, string or list of strings
 operations:                 # REQUIRED, non-empty list of { method, path }
   - method: GET
     path: /pets
+baseUrl: https://staging.example.com  # OPTIONAL, request base URL; overrides the spec's first servers[].url
 auth:                       # OPTIONAL, static token/headers (env-referenceable)
   token: "${API_TOKEN}"
   headers:
@@ -62,6 +106,16 @@ load:                       # OPTIONAL, default vus/duration
   vus: 10
   duration: 30s
 ```
+
+| Field | Required | Type | Description |
+| --- | --- | --- | --- |
+| `specs` | no | string \| string[] | Local OpenAPI 3.0/3.1 file path(s) to load (JSON or YAML). Paths resolve against the current working directory. |
+| `operations` | **yes** | `{ method, path }[]` | The opt-in operations to test. Must be non-empty; only these are ever run. |
+| `baseUrl` | no | string | Request base URL. Overrides the spec's first `servers[].url`. |
+| `auth` | no | mapping | Static auth applied to **every** selected operation: `token` (emits `Authorization: Bearer <token>`) and/or `headers` (name → value). Values support `${ENV_VAR}`. |
+| `payloads` | no | `{ method, path, ... }[]` | Per-operation payload overrides, keyed by `method` + `path`. Reserved for future use in v1. |
+| `output` | no | string | Results JSON path (see "Results file"). `--out` overrides it. |
+| `load` | no | `{ vus, duration }` | Default load profile. `--vus` / `--duration` override it. Defaults to `vus: 1`, `duration: 30s`. |
 
 `${ENV_VAR}` references are resolved from the process environment. An
 **unresolved** variable is non-fatal: SpecWeaver prints a warning to **stderr**

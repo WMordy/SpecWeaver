@@ -1,0 +1,49 @@
+# SpecWeaver sample config.
+#
+# Reference: from the repository root run
+#   specweaver --config samples/specweaver.config.yaml
+# Relative `specs` paths are resolved against the current working directory,
+# so run the example from the repo root (where `samples/` lives).
+#
+# The full config schema is documented in README.md.
+
+# OpenAPI source(s) to load. Optional; string or list of strings.
+# May also be overridden per run with `baseUrl` (see the README) to point the
+# generated tests at a different host without editing the spec.
+specs:
+  - samples/petstore.openapi.json
+
+# Opt-in operations. REQUIRED, non-empty. Each entry is exactly
+# `{ method, path }`. Only the operations listed here are ever tested.
+operations:
+  - method: GET
+    path: /pets
+  - method: POST
+    path: /pets
+  - method: GET
+    path: /pets/{petId}
+
+# Static auth injected into every selected request. `${ENV_VAR}` references are
+# resolved from the process environment; an unresolved one is a warning, not an
+# error. This sample uses a literal token so no environment setup is required.
+auth:
+  token: POC-TOKEN
+  headers:
+    X-Client: specweaver-sample
+
+# Per-operation payload overrides (keyed by method + path). Optional.
+payloads:
+  - method: POST
+    path: /pets
+    body:
+      name: Fido
+      tag: dog
+
+# Results JSON path. Optional. `--out` overrides it; otherwise it defaults to
+# `specweaver-results.json` in the current working directory.
+output: specweaver-results.json
+
+# Default load profile. Optional. `--vus` / `--duration` override these.
+load:
+  vus: 2
+  duration: 5s

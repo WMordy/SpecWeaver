@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 
 import { CliUsageError, USAGE, parseArgs, type CliOptions } from "./args.js";
 import { ConfigError, loadConfig, type ConfigResult } from "./config.js";
+import { SpecError, loadSpecs } from "./spec.js";
 
 /** Read the version string from the package manifest. */
 function readVersion(): string {
@@ -48,6 +49,28 @@ function run(options: CliOptions): number {
   process.stdout.write(
     `Load profile: ${config.load.vus} virtual user(s) for ${config.load.duration}.\n`,
   );
+
+  // Load and resolve every spec so downstream stages (payload generation,
+  // script emission) have a normalized operation catalog. A missing/invalid
+  // spec is a hard error and exits non-zero.
+  if (config.specs !== undefined) {
+    let catalogSize = 0;
+    try {
+      for (const spec of loadSpecs(config.specs)) {
+        catalogSize += spec.operations.length;
+      }
+    } catch (error) {
+      if (error instanceof SpecError) {
+        process.stderr.write(`${error.message}\n`);
+        return 1;
+      }
+      throw error;
+    }
+    process.stdout.write(
+      `Resolved specs: ${catalogSize} operation(s) in the catalog.\n`,
+    );
+  }
+
   // `result.warnings` holds any unresolved-`${ENV_VAR}` warnings collected
   // while loading; where they are surfaced is owned by SPEC-8.
   return 0;

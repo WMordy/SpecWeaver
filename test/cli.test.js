@@ -98,3 +98,21 @@ test("built CLI with an invalid config exits non-zero and names the field", () =
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /operations/);
 });
+
+test("built CLI with an invalid spec in the config exits non-zero and reports the spec error", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = join(dir, "openapi.yaml");
+  // Structurally invalid: carries a version but no `info`/`paths`.
+  writeFileSync(specPath, "openapi: 3.0.3\n");
+
+  const configPath = join(dir, "specweaver.yaml");
+  writeFileSync(
+    configPath,
+    `specs:\n  - ${specPath}\noperations:\n  - method: GET\n    path: /pets\n`,
+  );
+
+  const result = runCli(["--config", configPath]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /not a valid OpenAPI/);
+  assert.doesNotMatch(result.stderr, /RangeError/);
+});

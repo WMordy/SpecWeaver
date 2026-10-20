@@ -97,10 +97,10 @@ auth:                       # OPTIONAL, static token/headers (env-referenceable)
   token: "${API_TOKEN}"
   headers:
     X-Api-Key: "${API_KEY}"
-payloads:                   # OPTIONAL, per-operation payload overrides
+payloads:                   # OPTIONAL, per-operation JSON body overrides
   - method: POST
     path: /pets
-    body: { name: "Fido" }
+    body: { name: "Rex", tag: "override" }
 output: results.json        # OPTIONAL, results JSON path (see "Results file")
 load:                       # OPTIONAL, default vus/duration
   vus: 10
@@ -113,7 +113,7 @@ load:                       # OPTIONAL, default vus/duration
 | `operations` | **yes** | `{ method, path }[]` | The opt-in operations to test. Must be non-empty; only these are ever run. |
 | `baseUrl` | no | string | Request base URL. Overrides the spec's first `servers[].url`. |
 | `auth` | no | mapping | Static auth applied to **every** selected operation: `token` (emits `Authorization: Bearer <token>`) and/or `headers` (name → value). Values support `${ENV_VAR}`. |
-| `payloads` | no | `{ method, path, ... }[]` | Per-operation payload overrides, keyed by `method` + `path`. Reserved for future use in v1. |
+| `payloads` | no | `{ method, path, body }[]` | Per-operation JSON body overrides, keyed by `method` + `path`. `body` **replaces** the generated body wholesale (no deep merge). Method matching is case-insensitive. Overrides that match no selected operation warn on stderr; any field other than `method`, `path`, or `body` is rejected. |
 | `output` | no | string | Results JSON path (see "Results file"). `--out` overrides it. |
 | `load` | no | `{ vus, duration }` | Default load profile. `--vus` / `--duration` override it. Defaults to `vus: 1`, `duration: 30s`. |
 

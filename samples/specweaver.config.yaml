@@ -31,13 +31,18 @@ auth:
   headers:
     X-Client: specweaver-sample
 
-# Per-operation payload overrides (keyed by method + path). Optional.
+# Per-operation JSON body overrides (keyed by method + path). Optional.
+# `body` REPLACES the body generated from the spec example/default/faker for the
+# matching operation (whole value, not a deep merge). Matching normalizes method
+# case. This value is deliberately different from the spec's `Fido`/`dog`
+# example so a run visibly proves the override was applied. Overrides that match
+# no selected operation warn on stderr; unsupported keys are config errors.
 payloads:
   - method: POST
     path: /pets
     body:
-      name: Fido
-      tag: dog
+      name: SampleOverridePet
+      tag: override
 
 # Results JSON path. Optional. `--out` overrides it; otherwise it defaults to
 # `specweaver-results.json` in the current working directory.

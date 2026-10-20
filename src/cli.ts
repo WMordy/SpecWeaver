@@ -4,8 +4,8 @@ import { resolve } from "node:path";
 
 import { CliUsageError, USAGE, parseArgs, type CliOptions } from "./args.js";
 import { injectAuth } from "./auth.js";
-import { ConfigError, loadConfig, type ConfigResult } from "./config.js";
-import { generateAllRequestData } from "./request-data.js";
+import { ConfigError, loadConfig, type Config, type ConfigResult } from "./config.js";
+import { generateAllRequestData, applyPayloadOverrides } from "./request-data.js";
 import {
   EXIT_SPECWEAVER_ERROR,
   EXIT_SUCCESS,
@@ -177,13 +177,21 @@ async function run(options: CliOptions): Promise<number> {
   }
   process.stdout.write(`k6 found: ${k6Path}\n`);
 
-  // Generate the request data (SPEC-4), inject static auth (SPEC-5), and write
-  // the generated k6 script + data to a unique per-run temp directory (SPEC-6,
-  // hardened by SPEC-11). SPEC-7 then executes that script from the same
-  // directory and cleans up the whole directory afterwards.
+  // Generate the request data (SPEC-4), replace matching JSON bodies with
+  // configured `payloads` overrides (SPEC-13), inject static auth (SPEC-5), and
+  // write the generated k6 script + data to a unique per-run temp directory
+  // (SPEC-6, hardened by SPEC-11). SPEC-7 then executes that script from the
+  // same directory and cleans up the whole directory afterwards.
+  const generated = generateAllRequestData(selected);
+  const {
+    requests: overriddenRequests,
+    warnings: payloadWarnings,
+  } = applyPayloadOverrides(generated, config.payloads);
+  writeWarnings(payloadWarnings);
+
   const { requests, warnings: authWarnings } = injectAuth(
     config,
-    generateAllRequestData(selected),
+    overriddenRequests,
   );
   writeWarnings(authWarnings);
 

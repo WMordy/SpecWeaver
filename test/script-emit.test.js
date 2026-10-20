@@ -15,6 +15,10 @@ import test from "node:test";
 
 import { parseConfig } from "../dist/config.js";
 import {
+  applyPayloadOverrides,
+  generateRequestData,
+} from "../dist/request-data.js";
+import {
   DATA_FILE_NAME,
   DEFAULT_EXPECTED_STATUS,
   GENERATED_FILE_MODE,
@@ -82,6 +86,58 @@ test("emits one operation per request, preserving order", () => {
       ["POST", "/pets"],
     ],
   );
+});
+
+test("a distinctive payload override reaches the emitted request data", () => {
+  // Generate a body from the spec example, then override it with a value that
+  // appears nowhere in the spec: if the override were ignored, the emitted data
+  // would still contain the example value.
+  const generated = generateRequestData({
+    method: "POST",
+    path: "/pets",
+    parameters: [],
+    security: [],
+    requestBody: {
+      content: {
+        "application/json": {
+          schema: {
+            type: "object",
+            properties: {
+              name: { type: "string", example: "SpecExampleName" },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const overrideBody = {
+    name: "EmissionOnlyOverrideValue-9c3f",
+    note: "not-in-the-spec",
+  };
+  const { requests, warnings } = applyPayloadOverrides([generated], [
+    { method: "post", path: "/pets", body: overrideBody },
+  ]);
+  assert.deepEqual(warnings, []);
+
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-override-emit-"));
+  try {
+    const written = writeEmittedScript(
+      { config: config(), requests },
+      { directory: dir },
+    );
+    const data = JSON.parse(readFileSync(written.dataPath, "utf8"));
+    const post = data.operations.find(
+      (operation) => operation.method === "POST" && operation.route === "/pets",
+    );
+
+    assert.ok(post, "POST /pets should be emitted");
+    assert.deepEqual(JSON.parse(post.body), overrideBody);
+    assert.match(post.body, /EmissionOnlyOverrideValue-9c3f/);
+    assert.doesNotMatch(post.body, /SpecExampleName/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("composes the request URL from base URL, path params, and query", () => {

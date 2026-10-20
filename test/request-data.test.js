@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   DEFAULT_SEED,
+  applyPayloadOverrides,
   createFaker,
   generateAllRequestData,
   generateFromSchema,
@@ -934,5 +935,95 @@ components:
     [{}, {}],
     "the recursive array branch is truncated, not infinite",
   );
+});
+
+// --- SPEC-13: payload overrides -------------------------------------------
+
+/** A generated POST /pets request carrying a faker/example body. */
+function postPetsRequest() {
+  return generateRequestData(
+    operation({
+      method: "POST",
+      path: "/pets",
+      requestBody: jsonBody({
+        type: "object",
+        properties: {
+          name: { type: "string", example: "GeneratedName" },
+          tag: { type: "string", example: "generated-tag" },
+        },
+      }),
+    }),
+  );
+}
+
+test("a matching payload body replaces the generated JSON body wholesale", () => {
+  const generated = postPetsRequest();
+  assert.deepEqual(generated.body, {
+    name: "GeneratedName",
+    tag: "generated-tag",
+  });
+
+  const overrideBody = { name: "DistinctiveOverrideValue" };
+  const { requests, warnings } = applyPayloadOverrides([generated], [
+    { method: "POST", path: "/pets", body: overrideBody },
+  ]);
+
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(requests[0].body, overrideBody);
+  // Whole-value replacement: the generated `tag` is gone, not merged in.
+  assert.equal("tag" in requests[0].body, false);
+  // Non-body request data is preserved.
+  assert.equal(requests[0].method, "POST");
+  assert.equal(requests[0].path, "/pets");
+});
+
+test("payload override matching normalizes method case", () => {
+  const generated = postPetsRequest();
+
+  const lower = applyPayloadOverrides([generated], [
+    { method: "post", path: "/pets", body: { name: "lower" } },
+  ]);
+  const upper = applyPayloadOverrides([generated], [
+    { method: "POST", path: "/pets", body: { name: "lower" } },
+  ]);
+
+  assert.deepEqual(lower.warnings, []);
+  assert.deepEqual(lower.requests[0].body, { name: "lower" });
+  assert.deepEqual(lower.requests, upper.requests);
+});
+
+test("an override for an unselected operation warns and changes nothing", () => {
+  const generated = postPetsRequest();
+
+  const { requests, warnings } = applyPayloadOverrides([generated], [
+    { method: "DELETE", path: "/pets", body: { name: "never-applied" } },
+  ]);
+
+  assert.deepEqual(requests, [generated]);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /payload override for "DELETE \/pets"/);
+  assert.match(warnings[0], /does not match any selected operation/);
+});
+
+test("no payloads leaves generated request data byte-identical", () => {
+  const generated = [
+    postPetsRequest(),
+    generateRequestData(
+      operation({
+        method: "GET",
+        path: "/pets",
+        parameters: [
+          { name: "limit", in: "query", schema: { type: "integer" } },
+        ],
+      }),
+    ),
+  ];
+
+  for (const payloads of [undefined, []]) {
+    const { requests, warnings } = applyPayloadOverrides(generated, payloads);
+    assert.deepEqual(warnings, []);
+    assert.equal(JSON.stringify(requests), JSON.stringify(generated));
+    assert.deepEqual(requests, generated);
+  }
 });
 

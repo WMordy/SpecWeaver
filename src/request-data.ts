@@ -39,9 +39,15 @@
  * Out of scope for v1: non-JSON request bodies (multipart/form-data,
  * application/x-www-form-urlencoded, XML), cookie parameters, auth header
  * injection (SPEC-5), and executing requests.
+ *
+ * SPEC-13 adds {@link applyPayloadOverrides}: after generation, a configured
+ * `payloads[].body` replaces the generated JSON body of the operation whose
+ * normalized `METHOD path` key matches. Matching and warnings live here so the
+ * override contract is unit-testable independently of the CLI.
  */
 import { Faker, base, en } from "@faker-js/faker";
 
+import type { PayloadOverride } from "./config.js";
 import type {
   JsonObject,
   OperationEntry,
@@ -853,4 +859,70 @@ export function generateAllRequestData(
 ): GeneratedRequestData[] {
   const faker = createFaker(options.seed);
   return operations.map((operation) => generateWith(operation, faker));
+}
+
+/** The result of applying configured payload overrides. */
+export interface PayloadOverrideResult {
+  /** The request data with matching bodies replaced, in the original order. */
+  requests: GeneratedRequestData[];
+  /**
+   * Non-fatal warnings for overrides that matched no generated operation. The
+   * caller surfaces these on stderr (SPEC-8 style); they never fail the run.
+   */
+  warnings: string[];
+}
+
+/** The normalized `METHOD path` key shared with operation selection (SPEC-13). */
+function operationKey(method: string, path: string): string {
+  return `${method.toUpperCase()} ${path}`;
+}
+
+/**
+ * Apply `payloads` overrides to the generated request data (SPEC-13).
+ *
+ * Matching uses the same normalized key as operation selection: the method is
+ * upper-cased and the path is the OpenAPI path template, e.g. `POST /pets`.
+ * `body` is a **whole-value replacement** for the generated JSON body — there is
+ * no deep merge and all other generated request fields are preserved.
+ *
+ * Overrides that match no entry in `requests` (because the operation was not
+ * selected, or is absent from the loaded spec) are reported in `warnings` and
+ * otherwise ignored. When `payloads` is absent or empty the input array is
+ * returned unchanged, so the no-override path is byte-identical to before.
+ */
+export function applyPayloadOverrides(
+  requests: GeneratedRequestData[],
+  payloads: readonly PayloadOverride[] | undefined,
+): PayloadOverrideResult {
+  if (payloads === undefined || payloads.length === 0) {
+    return { requests, warnings: [] };
+  }
+
+  const overrides = new Map<string, PayloadOverride>();
+  for (const override of payloads) {
+    overrides.set(operationKey(override.method, override.path), override);
+  }
+
+  const applied = new Set<string>();
+  const result = requests.map((request) => {
+    const key = operationKey(request.method, request.path);
+    const override = overrides.get(key);
+    if (override === undefined) {
+      return request;
+    }
+    applied.add(key);
+    return { ...request, body: override.body };
+  });
+
+  const warnings: string[] = [];
+  for (const override of payloads) {
+    const key = operationKey(override.method, override.path);
+    if (!applied.has(key)) {
+      warnings.push(
+        `payload override for "${key}" does not match any selected operation; ignoring.`,
+      );
+    }
+  }
+
+  return { requests: result, warnings };
 }

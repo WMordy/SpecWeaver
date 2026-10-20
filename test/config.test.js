@@ -116,6 +116,71 @@ load:
   );
 });
 
+test("payload overrides parse into typed method + path + body entries", () => {
+  const { config } = parseConfig(
+    `operations:
+  - method: POST
+    path: /pets
+payloads:
+  - method: post
+    path: /pets
+    body:
+      name: Rex
+      tag: override
+`,
+  );
+  assert.deepEqual(config.payloads, [
+    { method: "POST", path: "/pets", body: { name: "Rex", tag: "override" } },
+  ]);
+});
+
+test("payload overrides reject unsupported keys instead of silently ignoring them", () => {
+  const yaml = `operations:
+  - method: POST
+    path: /pets
+payloads:
+  - method: POST
+    path: /pets
+    query:
+      limit: 5
+    body:
+      name: Rex
+`;
+  assert.throws(
+    () => parseConfig(yaml),
+    /unknown field `payloads\[0\]\.query`.*only `method`, `path`, and `body`/,
+  );
+});
+
+test("payload overrides require a body to replace", () => {
+  const yaml = `operations:
+  - method: POST
+    path: /pets
+payloads:
+  - method: POST
+    path: /pets
+`;
+  assert.throws(
+    () => parseConfig(yaml),
+    /payloads\[0\].*must define a `body`/,
+  );
+});
+
+test("a duplicate payload override key fails validation", () => {
+  const yaml = `operations:
+  - method: POST
+    path: /pets
+payloads:
+  - method: POST
+    path: /pets
+    body: { name: A }
+  - method: post
+    path: /pets
+    body: { name: B }
+`;
+  assert.throws(() => parseConfig(yaml), /duplicate payload override `POST \/pets`/);
+});
+
 test("missing operations fails validation with a clear error", () => {
   assert.throws(
     () => parseConfig("specs: ./openapi.yaml\n"),

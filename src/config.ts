@@ -25,7 +25,7 @@
  *   token: "${API_TOKEN}"
  *   headers:
  *     X-Api-Key: "${API_KEY}"
- * payloads:                   # OPTIONAL, per-operation payload overrides (reserved; unused in v1)
+ * payloads:                   # OPTIONAL, per-operation JSON body overrides
  *   - method: POST
  *     path: /pets
  *     body: { name: "Fido" }
@@ -74,14 +74,18 @@ export interface AuthConfig {
 /**
  * Per-operation payload override, keyed by `method` + `path`.
  *
- * `data` holds the override fields (e.g. a `body`). These overrides are parsed
- * and validated but are **reserved/unused in v1**: no downstream ticket
- * consumes them yet.
+ * `body` is the complete replacement for the generated JSON request body of the
+ * matching operation (whole-value replacement, not a deep merge). The method is
+ * normalized to uppercase so matching is case-insensitive, exactly like
+ * operation selection.
  */
 export interface PayloadOverride {
+  /** Upper-cased HTTP method, e.g. `POST`. */
   method: string;
+  /** OpenAPI path template, e.g. `/pets`. */
   path: string;
-  data: Record<string, unknown>;
+  /** The replacement JSON request body (any JSON value). */
+  body: unknown;
 }
 
 /**
@@ -103,8 +107,9 @@ export interface Config {
   /** Static auth, with `${ENV_VAR}` references already resolved. */
   auth?: AuthConfig;
   /**
-   * Per-operation payload overrides. Parsed and validated but **reserved and
-   * currently unused in v1** (no downstream ticket consumes them yet).
+   * Per-operation JSON body overrides, applied before auth injection. Each
+   * entry replaces (never deep-merges) the generated body of the operation whose
+   * normalized `method` + `path` matches.
    */
   payloads?: PayloadOverride[];
   /**
@@ -174,6 +179,12 @@ const ROOT_KEYS = new Set([
 ]);
 const LOAD_KEYS = new Set(["vus", "duration"]);
 const AUTH_KEYS = new Set(["token", "headers"]);
+/**
+ * Fields accepted in a `payloads` entry. v1 supports only a whole-value JSON
+ * body replacement; anything else is an explicit error rather than silently
+ * ignored (SPEC-13).
+ */
+const PAYLOAD_KEYS = new Set(["method", "path", "body"]);
 
 /** Error thrown when the config cannot be read, parsed, or validated. */
 export class ConfigError extends Error {
@@ -406,32 +417,61 @@ function validatePayloads(value: unknown, errors: string[]): PayloadOverride[] |
   }
 
   const payloads: PayloadOverride[] = [];
+  const seen = new Set<string>();
 
   value.forEach((entry, index) => {
     const at = `payloads[${index}]`;
     if (!isPlainObject(entry)) {
-      errors.push(`\`${at}\` must be a mapping with \`method\` and \`path\``);
+      errors.push(`\`${at}\` must be a mapping with \`method\`, \`path\`, and \`body\``);
       return;
     }
 
-    const method = entry.method;
-    const path = entry.path;
-    if (typeof method !== "string" || method.trim() === "") {
-      errors.push(`\`${at}.method\` must be a non-empty string`);
-      return;
-    }
-    if (typeof path !== "string" || path.trim() === "") {
-      errors.push(`\`${at}.path\` must be a non-empty string`);
-      return;
-    }
-
-    const data: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(entry)) {
-      if (key !== "method" && key !== "path") {
-        data[key] = item;
+    for (const key of Object.keys(entry)) {
+      if (!PAYLOAD_KEYS.has(key)) {
+        errors.push(
+          `unknown field \`${at}.${key}\`; payload overrides support only \`method\`, \`path\`, and \`body\``,
+        );
       }
     }
-    payloads.push({ method: method.toUpperCase(), path, data });
+    if (!("body" in entry)) {
+      errors.push(
+        `\`${at}\` must define a \`body\` (payload overrides support only \`method\`, \`path\`, and \`body\`)`,
+      );
+    }
+
+    const rawMethod = entry.method;
+    const rawPath = entry.path;
+    let valid = true;
+    let method = "";
+    let path = "";
+    if (typeof rawMethod !== "string" || rawMethod.trim() === "") {
+      errors.push(`\`${at}.method\` must be a non-empty string`);
+      valid = false;
+    } else if (!HTTP_METHOD_SET.has(rawMethod.toUpperCase())) {
+      errors.push(
+        `\`${at}.method\` must be one of ${HTTP_METHODS.join(", ")} (received "${rawMethod}")`,
+      );
+      valid = false;
+    } else {
+      method = rawMethod.toUpperCase();
+    }
+    if (typeof rawPath !== "string" || rawPath.trim() === "") {
+      errors.push(`\`${at}.path\` must be a non-empty string`);
+      valid = false;
+    } else {
+      path = rawPath;
+    }
+    if (!valid) {
+      return;
+    }
+
+    const id = `${method} ${path}`;
+    if (seen.has(id)) {
+      errors.push(`duplicate payload override \`${id}\``);
+      return;
+    }
+    seen.add(id);
+    payloads.push({ method, path, body: entry.body });
   });
 
   return payloads;

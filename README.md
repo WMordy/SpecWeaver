@@ -79,6 +79,7 @@ specweaver --config <path> [options]
 | `--vus <n>` | Number of virtual users (positive integer). Overrides the config. |
 | `--duration <time>` | k6-style load duration, e.g. `30s` or `1m30s`. Overrides the config. |
 | `--out <path>` | Path to write the results JSON file. Overrides the config `output`. |
+| `--fail-on-check-failure` | Exit non-zero when any recorded check fails. Boolean; takes no value and is off by default. See "Check gating". |
 | `--help` | Print usage. |
 | `--version` | Print the version. |
 
@@ -211,18 +212,55 @@ with the live k6 output.
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Success — k6 ran and exited `0` (`--help` and `--version` also exit `0`). |
-| `1` | k6 run/script failure — k6 ran but exited non-zero (or was terminated by a signal). |
+| `0` | Success — k6 ran and exited `0`, and the opt-in check gate did not trip (`--help` and `--version` also exit `0`). |
+| `1` | k6 run/script failure — k6 ran but exited non-zero (or was terminated by a signal), **or** the opt-in `--fail-on-check-failure` gate tripped because at least one recorded check failed. |
 | `2` | SpecWeaver-level error — invalid/missing config, a config with no `specs` or no matching operations (nothing ran), a spec/validation failure, a preflight failure (including "k6 not found"), or an internal error. k6 is not run. |
 
-For an actual run, SpecWeaver exits `0` only when it ran k6 and k6 exited `0`;
-any non-zero k6 exit yields a non-zero SpecWeaver exit and is never converted to
-success. SLA `thresholds` and pass/fail gating on metrics are out of scope for
-v1 — a failing `check` is informational only.
+For an actual run, SpecWeaver exits `0` only when it ran k6, k6 exited `0`, and
+(if `--fail-on-check-failure` was set) no recorded check failed; any non-zero k6
+exit yields a non-zero SpecWeaver exit and is never converted to success. A
+failing `check` is informational by default, and becomes a run failure only when
+you opt in with `--fail-on-check-failure`. SLA `thresholds` and pass/fail gating
+on metrics are out of scope for v1; the flag gates recorded checks only.
 
 An unexpected **internal** error is reported as a single clean, actionable
 message on stderr (never a raw stack trace, and never secret material) and exits
 `2`, so it can never be mistaken for a k6 run failure (`1`).
+
+### Check gating
+
+By default, failing checks do not change the exit code: k6 can exit `0` with
+failed checks and SpecWeaver still exits `0`. Pass `--fail-on-check-failure` to
+opt into the opposite behaviour for recorded checks:
+
+- With the flag set, a run recording at least one failing check
+  (`summary.checks.fail > 0`) exits `1`.
+- Zero recorded checks (`summary.checks.pass + summary.checks.fail === 0`) never
+  trip the gate, even with the flag set; a k6-success run still exits `0`.
+- With the flag absent, exit codes are unchanged: a k6-success run exits `0`
+  even when checks failed.
+- A genuine non-zero k6 exit (including termination by a signal) always yields
+  exit `1`, whether or not the flag is present. The gate never masks a k6
+  failure; it only promotes a k6-success run to `1`.
+
+The gate runs last, after the results JSON has been written and the console
+summary has been printed, so neither is affected by it. When the flag trips the
+gate, SpecWeaver emits a single stderr message naming the flag and the number of
+failing checks, e.g.:
+
+```text
+error: --fail-on-check-failure: 2 failing checks recorded; exiting with code 1.
+```
+
+The flag is **CLI-only**: it has no YAML equivalent. `Config` and its validation
+are unchanged, and adding a `failOnCheckFailure: true` key to the YAML config is
+still rejected as an unknown field (`` unknown field `failOnCheckFailure` ``),
+exiting `2` before k6 runs. There is no negated form and no
+`--fail-on-check-failure=true|false` value form.
+
+```sh
+specweaver --config samples/specweaver.config.yaml --fail-on-check-failure
+```
 
 ## Development
 

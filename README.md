@@ -137,7 +137,10 @@ path is resolved in this order:
 
 The path is also printed in the console summary (and recorded in the file's own
 `resultsFile` field). `--out` and `output` name **only** this results JSON; they
-never name the generated k6 script/data, which live in `os.tmpdir()`.
+never name the generated k6 script/data. Those are written to a unique per-run
+directory under `os.tmpdir()` (created with `mkdtemp`) with owner-only (`0600`)
+permissions, and the whole directory is deleted after the run unless
+`SPECWEAVER_KEEP_TEMP` is set for inspection.
 
 ### Results schema
 

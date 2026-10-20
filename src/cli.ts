@@ -178,8 +178,9 @@ async function run(options: CliOptions): Promise<number> {
   process.stdout.write(`k6 found: ${k6Path}\n`);
 
   // Generate the request data (SPEC-4), inject static auth (SPEC-5), and write
-  // the generated k6 script + data to the shared specweaver temp location
-  // (SPEC-6). SPEC-7 then executes that script.
+  // the generated k6 script + data to a unique per-run temp directory (SPEC-6,
+  // hardened by SPEC-11). SPEC-7 then executes that script from the same
+  // directory and cleans up the whole directory afterwards.
   const { requests, warnings: authWarnings } = injectAuth(
     config,
     generateAllRequestData(selected),
@@ -203,6 +204,9 @@ async function run(options: CliOptions): Promise<number> {
     const runResult = await runGeneratedTest({
       command: k6Path,
       scriptPath: written.scriptPath,
+      directory: written.directory,
+      // SPEC-11: remove the unique per-run directory and its contents.
+      removeDirectory: true,
       vus: config.load.vus,
       duration: config.load.duration,
       // A3: capture k6's raw NDJSON alongside SPEC-7's live streaming.

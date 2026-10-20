@@ -17,17 +17,18 @@
  * `node:test` skip mechanism, reported by `node --test`) when the `k6` binary is
  * not on PATH, so the suite is green with k6 either present or absent.
  *
- * The generated script/data live at fixed names under `os.tmpdir()` (SPEC-6 A2),
- * and `node --test` runs test files concurrently. The e2e therefore gives its
- * child process a private `TMPDIR` so its artifacts cannot collide with the
- * other suites that also touch `os.tmpdir()`.
+ * The generated script/data live in a unique per-run directory under
+ * `os.tmpdir()` (SPEC-6 A2, hardened by SPEC-11), and `node --test` runs test
+ * files concurrently. The e2e therefore gives its child process a private
+ * `TMPDIR` so its artifacts cannot collide with the other suites that also
+ * touch `os.tmpdir()`.
  */
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -154,9 +155,6 @@ test(
     const artifactDir = mkdtempSync(join(tmpdir(), "specweaver-e2e-artifacts-"));
     const configPath = join(workDir, "specweaver.config.yaml");
     const resultsPath = join(workDir, "results.json");
-    const dataPath = join(artifactDir, DATA_FILE_NAME);
-    const scriptPath = join(artifactDir, SCRIPT_FILE_NAME);
-    const rawMetricsPath = join(artifactDir, "specweaver.k6-results.ndjson");
 
     // Reuse the committed sample config verbatim, overriding only the base URL
     // so the run hits the in-test mock server (SPEC-9 decision 4). `specs` paths
@@ -194,6 +192,19 @@ test(
 
       // The pipeline ran to completion and exited 0.
       assert.equal(result.status, 0, result.stderr);
+
+      // SPEC-11: the artifacts live in a unique per-run directory under TMPDIR.
+      const generated = result.stdout.match(/^Generated k6 script: (.+)$/m);
+      assert.ok(generated, `expected a generated-script path:\n${result.stdout}`);
+      const scriptPath = generated[1].trim();
+      const runDir = dirname(scriptPath);
+      const dataPath = join(runDir, DATA_FILE_NAME);
+      assert.ok(runDir.startsWith(artifactDir), `unexpected temp dir: ${runDir}`);
+      assert.ok(
+        basename(runDir).startsWith("specweaver-"),
+        `unexpected temp dir name: ${runDir}`,
+      );
+      assert.equal(basename(scriptPath), SCRIPT_FILE_NAME);
 
       // Execution actually reached the mock server for both sample operations.
       assert.ok(
@@ -233,8 +244,7 @@ test(
         JSON.stringify(results.checks),
       );
     } finally {
-      // KEEP_TEMP may have left the raw metrics file behind; remove our dirs.
-      rmSync(rawMetricsPath, { force: true });
+      // KEEP_TEMP left the per-run directory behind; remove the whole TMPDIR.
       server.closeAllConnections?.();
       await new Promise((resolve) => server.close(resolve));
       rmSync(workDir, { recursive: true, force: true });

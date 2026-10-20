@@ -410,9 +410,9 @@ function runCli(
   configPath,
   { binDir, fixture, cwd, args = [], env = {}, unset = [] } = {},
 ) {
-  // Isolate each invocation's temp namespace: the generated script/data and the
-  // raw k6 capture use fixed file names under os.tmpdir(), so parallel test
-  // files must not share a TMPDIR.
+  // Isolate each invocation's temp namespace: the CLI creates a unique per-run
+  // directory (and k6 raw capture) under TMPDIR, so parallel test files must
+  // not share one.
   const sandbox = mkdtempSync(join(tmpdir(), "sw-tmp-"));
   const childEnv = {
     ...process.env,

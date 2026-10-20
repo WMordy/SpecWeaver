@@ -2,27 +2,30 @@
  * k6 preflight and execution (SPEC-7).
  *
  * This is the **execution** stage of SpecWeaver: after SPEC-6 writes the
- * generated k6 script (plus its companion data) to a specweaver-prefixed temp
- * location under `os.tmpdir()`, this module confirms k6 is available and runs
+ * generated k6 script (plus its companion data) to a unique per-run temp
+ * directory under `os.tmpdir()`, this module confirms k6 is available and runs
  * it, streaming k6's output live and capturing its exit code for hand-off to
  * SPEC-8's exit-code policy.
  *
  * ## Interface with SPEC-6 (writer) and SPEC-7 (reader)
  *
- * The generated-script/data temp location is shared, not duplicated here: this
+ * The generated-script/data location is shared, not duplicated here: this
  * module imports {@link SCRIPT_FILE_NAME} / {@link DATA_FILE_NAME} from the
- * SPEC-6 emitter so writer and reader can never drift. The script is
- * `os.tmpdir()/specweaver.generated.js` and its companion data is
- * `os.tmpdir()/specweaver.data.json`. `--out` / the config `output` field do
- * **not** name these paths — they target only the SPEC-8 results JSON.
+ * SPEC-6 emitter so writer and reader can never drift. Since SPEC-11 the script
+ * and its companion data live together in a unique per-run directory (e.g.
+ * `os.tmpdir()/specweaver-Ab3dEf/specweaver.generated.js` and
+ * `.../specweaver.data.json`), executed from there. `--out` / the config
+ * `output` field do **not** name these paths — they target only the SPEC-8
+ * results JSON.
  *
  * ## Locked decisions implemented here (product owner, 2026-10-18)
  *
- * 1. **Generated-script location:** specweaver-prefixed temp files under
- *    `os.tmpdir()`, executed from there (no repo-local default).
- * 2. **Temp-script lifecycle:** the temp script and data are removed after the
- *    run by default, with an opt-out to keep them for inspection
- *    ({@link KEEP_TEMP_ENV} or the programmatic `keepTemp` option).
+ * 1. **Generated-script location:** specweaver-prefixed temp artifacts under
+ *    `os.tmpdir()`, executed from there (no repo-local default). SPEC-11
+ *    hardens this to a unique per-run directory with `0o600` files.
+ * 2. **Temp-script lifecycle:** the per-run temp directory and its contents are
+ *    removed after the run by default, with an opt-out to keep them for
+ *    inspection ({@link KEEP_TEMP_ENV} or the programmatic `keepTemp` option).
  * 3. **Output mode:** streaming via `stdio: 'inherit'` so k6's stdout and
  *    stderr pass through unmodified and in real time (never buffered).
  * 4. **No `--k6-path` override:** discovery is PATH lookup only.
@@ -161,20 +164,21 @@ export function resolveK6(
 }
 
 /** Absolute path of the generated k6 script under `directory` (SPEC-6's A2). */
-export function generatedScriptPath(directory: string = tmpdir()): string {
+export function generatedScriptPath(directory: string): string {
   return join(directory, SCRIPT_FILE_NAME);
 }
 
 /** Absolute path of the generated companion data file under `directory`. */
-export function generatedDataPath(directory: string = tmpdir()): string {
+export function generatedDataPath(directory: string): string {
   return join(directory, DATA_FILE_NAME);
 }
 
 /**
  * Absolute path of the raw k6 metrics file under `directory` (SPEC-8, A3). k6
  * writes its NDJSON here via `--out json=<file>`; SPEC-8 reads it after the run.
+ * It lives in the same per-run directory as the script/data (SPEC-11).
  */
-export function rawResultsPath(directory: string = tmpdir()): string {
+export function rawResultsPath(directory: string): string {
   return join(directory, K6_RAW_RESULTS_FILE_NAME);
 }
 
@@ -207,7 +211,11 @@ export interface K6RunOptions {
    * {@link generatedScriptPath}`(directory)`.
    */
   scriptPath?: string;
-  /** Directory holding the generated script/data. Defaults to `os.tmpdir()`. */
+  /**
+   * Directory holding the generated script/data (the per-run temp directory).
+   * Defaults to `os.tmpdir()`; the CLI passes the unique directory created by
+   * the SPEC-6 emitter (SPEC-11).
+   */
   directory?: string;
   /** Value passed through as `--vus`. */
   vus?: number;
@@ -221,6 +229,14 @@ export interface K6RunOptions {
   env?: NodeJS.ProcessEnv;
   /** Keep the temp script/data after the run (opt-out of delete-after-run). */
   keepTemp?: boolean;
+  /**
+   * Remove the whole `directory` (not just the known generated files) during
+   * delete-after-run. The CLI sets this for the unique per-run directory
+   * created by SPEC-6 (SPEC-11). Defaults to `false`, which only removes the
+   * generated script/data/raw-metrics files — never a caller-owned parent
+   * directory.
+   */
+  removeDirectory?: boolean;
   /**
    * Capture k6's raw NDJSON metrics via `--out json=<tempfile>` (SPEC-8, A3).
    * Defaults to `false`. When enabled, the file is read into
@@ -284,8 +300,26 @@ function isKeepTemp(env: NodeJS.ProcessEnv): boolean {
   return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
 }
 
-/** Best-effort removal of the generated temp artifacts (delete-after-run). */
-function removeGeneratedArtifacts(directory: string): void {
+/**
+ * Best-effort removal of the generated temp artifacts (delete-after-run).
+ *
+ * By default only the known generated files are removed, so a caller-supplied
+ * parent directory is never deleted wholesale. With `removeDirectory` the whole
+ * per-run directory is removed recursively (SPEC-11); cleanup never masks the
+ * run outcome.
+ */
+function removeGeneratedArtifacts(
+  directory: string,
+  removeDirectory: boolean,
+): void {
+  if (removeDirectory) {
+    try {
+      rmSync(directory, { recursive: true, force: true });
+    } catch {
+      // Cleanup is best-effort: never mask the run outcome.
+    }
+    return;
+  }
   for (const path of [
     generatedScriptPath(directory),
     generatedDataPath(directory),
@@ -334,11 +368,11 @@ export function spawnErrorMessage(command: string, error: unknown): string {
  * Execute the generated k6 script, streaming k6's output live and mapping its
  * exit code onto SpecWeaver's policy.
  *
- * The generated temp script/data (and the raw metrics capture, when requested)
- * are removed afterwards unless the keep-temp opt-out is set (decision 2). A
- * missing k6 throws {@link K6NotFoundError}; a spawn-level failure throws
- * {@link K6SpawnError}; a non-zero k6 exit is a normal result whose
- * {@link K6RunResult.exitCode} is the k6-run-failure code.
+ * The generated temp directory (script/data, plus the raw metrics capture when
+ * requested) is removed afterwards unless the keep-temp opt-out is set
+ * (decision 2). A missing k6 throws {@link K6NotFoundError}; a spawn-level
+ * failure throws {@link K6SpawnError}; a non-zero k6 exit is a normal result
+ * whose {@link K6RunResult.exitCode} is the k6-run-failure code.
  *
  * When {@link K6RunOptions.captureResults} is set, `--out json=<tempfile>` is
  * added to the k6 invocation and the file is read into
@@ -388,7 +422,10 @@ export async function runGeneratedTest(
     return result;
   } finally {
     if (!keepTemp) {
-      removeGeneratedArtifacts(directory);
+      removeGeneratedArtifacts(
+        directory,
+        options.removeDirectory ?? false,
+      );
     }
   }
 }

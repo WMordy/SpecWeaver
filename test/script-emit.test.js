@@ -1,17 +1,26 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import test from "node:test";
 
 import { parseConfig } from "../dist/config.js";
 import {
   DATA_FILE_NAME,
   DEFAULT_EXPECTED_STATUS,
+  GENERATED_FILE_MODE,
   JSON_CONTENT_TYPE,
   SCRIPT_FILE_NAME,
+  TEMP_DIRECTORY_PREFIX,
   buildRequestUrl,
   emitScript,
   resolveBaseUrl,
@@ -385,28 +394,69 @@ test("writeEmittedScript writes byte-identical files on repeated runs", () => {
   assert.equal(readFileSync(a.dataPath, "utf8"), readFileSync(b.dataPath, "utf8"));
 });
 
-// --- Output location (A2) --------------------------------------------------
+// --- Output location (A2, hardened by SPEC-11) ----------------------------
 
-test("writes specweaver.generated.js and specweaver.data.json under os.tmpdir()", () => {
-  const written = writeEmittedScript({
+test("writes the artifacts into a unique per-run directory under os.tmpdir()", () => {
+  const input = {
     config: config({ baseUrl: "http://host", output: "results.json" }),
     requests: [request()],
-  });
+  };
+  const first = writeEmittedScript(input);
+  const second = writeEmittedScript(input);
 
-  assert.equal(written.scriptPath, join(tmpdir(), SCRIPT_FILE_NAME));
-  assert.equal(written.dataPath, join(tmpdir(), DATA_FILE_NAME));
-  assert.ok(written.scriptPath.startsWith(tmpdir()));
+  try {
+    // A fresh unpredictable directory per run: no shared fixed path.
+    assert.notEqual(first.directory, second.directory);
+    for (const written of [first, second]) {
+      assert.ok(written.directory.startsWith(tmpdir()));
+      assert.ok(basename(written.directory).startsWith(TEMP_DIRECTORY_PREFIX));
+      assert.equal(written.scriptPath, join(written.directory, SCRIPT_FILE_NAME));
+      assert.equal(written.dataPath, join(written.directory, DATA_FILE_NAME));
+      assert.ok(existsSync(written.scriptPath));
+      assert.ok(existsSync(written.dataPath));
 
-  // The config `output` field does NOT name the generated artifacts.
-  assert.notEqual(written.scriptPath, join(tmpdir(), "results.json"));
-  assert.notEqual(written.dataPath, join(tmpdir(), "results.json"));
+      // The script's open() reference resolves to the sibling data file.
+      assert.match(written.script, new RegExp(`open\\('${DATA_FILE_NAME}'\\)`));
 
-  // The script's open() reference resolves to the sibling data file.
-  assert.match(written.script, new RegExp(`open\\('${DATA_FILE_NAME}'\\)`));
-  const onDisk = readdirSync(tmpdir());
-  assert.ok(onDisk.includes(SCRIPT_FILE_NAME));
-  assert.ok(onDisk.includes(DATA_FILE_NAME));
+      // The config `output` field does NOT name the generated artifacts.
+      assert.notEqual(written.scriptPath, join(written.directory, "results.json"));
+      assert.notEqual(written.dataPath, join(written.directory, "results.json"));
+    }
+
+    // Only the path is random; the contents stay deterministic.
+    assert.equal(
+      readFileSync(first.scriptPath, "utf8"),
+      readFileSync(second.scriptPath, "utf8"),
+    );
+    assert.equal(
+      readFileSync(first.dataPath, "utf8"),
+      readFileSync(second.dataPath, "utf8"),
+    );
+  } finally {
+    rmSync(first.directory, { recursive: true, force: true });
+    rmSync(second.directory, { recursive: true, force: true });
+  }
 });
+
+test(
+  "creates the generated files with owner-only 0o600 permissions",
+  { skip: process.platform === "win32" ? "POSIX permission bits only" : false },
+  () => {
+    const written = writeEmittedScript({
+      config: config({ baseUrl: "http://host" }),
+      requests: [request({ headers: { Authorization: "Bearer secret" } })],
+    });
+    try {
+      assert.equal(GENERATED_FILE_MODE, 0o600);
+      assert.equal(statSync(written.scriptPath).mode & 0o777, 0o600);
+      assert.equal(statSync(written.dataPath).mode & 0o777, 0o600);
+      // mkdtemp creates the containing per-run directory owner-only (0700).
+      assert.equal(statSync(written.directory).mode & 0o777, 0o700);
+    } finally {
+      rmSync(written.directory, { recursive: true, force: true });
+    }
+  },
+);
 
 // --- Dependency-free guard -------------------------------------------------
 

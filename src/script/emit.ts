@@ -25,13 +25,15 @@
  *   SPEC-10, 2026-10-18); this module only *consumes* it, applying the
  *   precedence above without re-validating the field.
  * - **A2 / Output location:** the script is `specweaver.generated.js` and its
- *   data is `specweaver.data.json`, both written under `os.tmpdir()` with a
- *   `specweaver` prefix — the SAME location SPEC-7 reads and executes. `--out`
- *   and the config `output` field do **not** name these paths (they target only
- *   the SPEC-8 results JSON). **Temp-file posture (v1, 2026-10-18):** fixed
- *   file names are accepted (single-run semantics — one run at a time), and the
- *   data file may contain plaintext auth secrets in `$TMPDIR`; SPEC-7 owns
- *   delete-after-run and any hardened/unique-name opt-out.
+ *   data is `specweaver.data.json`, written together in a unique per-run
+ *   directory under `os.tmpdir()` created with
+ *   `fs.mkdtempSync(join(os.tmpdir(), "specweaver-"))` — the SAME directory
+ *   SPEC-7 executes from. `--out` and the config `output` field do **not** name
+ *   these paths (they target only the SPEC-8 results JSON). **Temp-file posture
+ *   (hardened, SPEC-11):** a fresh unpredictable directory per run avoids fixed
+ *   names and collisions, and the files are created with `0o600` permissions
+ *   where the platform supports it; SPEC-7 removes the whole directory after
+ *   the run unless the keep-temp opt-out is set.
  * - **A3 / A5 / Checks:** each request is wrapped in one informational `check`
  *   asserting the response status is one of the operation's documented 2xx
  *   response(s), defaulting to `200` when the spec documents none. A wildcard
@@ -73,8 +75,10 @@
  *    (`application/x-www-form-urlencoded`) and loses nested objects/arrays. The
  *    emitter now serializes JSON bodies to strings and emits an explicit
  *    `Content-Type: application/json` header, without overriding an existing one.
- * 5. **Temp-file posture (v1).** Fixed file names and plaintext secrets in
- *    `$TMPDIR` are accepted for v1; SPEC-7 owns delete-after-run.
+ * 5. **Temp-file posture (superseded by SPEC-11, 2026-10-20).** The original
+ *    v1 posture accepted fixed file names and plaintext secrets in `$TMPDIR`.
+ *    SPEC-11 hardens this: a unique per-run directory plus `0o600` files;
+ *    plaintext secrets at runtime and SPEC-7's delete-after-run are unchanged.
  *
  * ## URL composition
  *
@@ -84,7 +88,7 @@
  * deterministic and unit-testable without requiring k6. {@link buildRequestUrl}
  * is exported for direct testing.
  */
-import { writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -97,6 +101,21 @@ export const SCRIPT_FILE_NAME = "specweaver.generated.js";
 
 /** The default file name of the emitted companion data file (A2). */
 export const DATA_FILE_NAME = "specweaver.data.json";
+
+/**
+ * Prefix of the per-run temp directory (e.g. `/tmp/specweaver-Ab3dEf`).
+ * `mkdtempSync` appends a random suffix, so each run gets an unpredictable,
+ * collision-free location (SPEC-11).
+ */
+export const TEMP_DIRECTORY_PREFIX = "specweaver-";
+
+/**
+ * Permission bits for the generated files (SPEC-11): owner-only read/write, so
+ * the companion data file (which may contain plaintext auth headers) is not
+ * world-readable. Applied on creation; platforms that do not support POSIX
+ * modes ignore it.
+ */
+export const GENERATED_FILE_MODE = 0o600;
 
 /** Status used when the spec documents no 2xx response for an operation (A5). */
 export const DEFAULT_EXPECTED_STATUS = 200;
@@ -189,6 +208,8 @@ export interface EmittedScript {
 
 /** The result of {@link writeEmittedScript}: the artifacts plus their paths. */
 export interface WrittenScript extends EmittedScript {
+  /** Absolute path to the per-run directory holding both artifacts. */
+  directory: string;
   /** Absolute path to the written k6 script. */
   scriptPath: string;
   /** Absolute path to the written companion data file. */
@@ -198,8 +219,10 @@ export interface WrittenScript extends EmittedScript {
 /** Options for {@link writeEmittedScript}. */
 export interface WriteOptions {
   /**
-   * Directory to write into. Defaults to `os.tmpdir()`. The script's `open()`
-   * reference is a sibling file name, so it resolves regardless of directory.
+   * Exact directory to write into. When omitted, a unique per-run directory is
+   * created under `os.tmpdir()` (prefix {@link TEMP_DIRECTORY_PREFIX}); this is
+   * the production path (SPEC-11). The script's `open()` reference is a sibling
+   * file name, so it resolves regardless of directory.
    */
   directory?: string;
 }
@@ -468,22 +491,35 @@ export function emitScript(input: EmitInput): EmittedScript {
 
 /**
  * Emit and write both artifacts once: the script to {@link SCRIPT_FILE_NAME}
- * and the data to {@link DATA_FILE_NAME}, under `os.tmpdir()` by default (A2).
+ * and the data to {@link DATA_FILE_NAME} inside a directory.
  *
- * SPEC-7 owns cleanup (delete-after-run) and any keep-for-inspection opt-out;
- * this function only writes the files and records their paths.
+ * Unless `options.directory` is supplied, a unique per-run directory is created
+ * under `os.tmpdir()` (SPEC-11). File contents are unchanged by this: only the
+ * location is random, and the script's `open()` reference is the sibling data
+ * file name.
+ *
+ * SPEC-7 owns cleanup (delete-after-run) and the keep-for-inspection opt-out;
+ * this function only writes the files and records their paths/directory.
  */
 export function writeEmittedScript(
   input: EmitInput,
   options: WriteOptions = {},
 ): WrittenScript {
   const { script, data } = emitScript(input);
-  const directory = options.directory ?? tmpdir();
+  const directory =
+    options.directory ??
+    mkdtempSync(join(tmpdir(), TEMP_DIRECTORY_PREFIX));
   const scriptPath = join(directory, SCRIPT_FILE_NAME);
   const dataPath = join(directory, DATA_FILE_NAME);
 
-  writeFileSync(scriptPath, script, "utf8");
-  writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  writeFileSync(scriptPath, script, {
+    encoding: "utf8",
+    mode: GENERATED_FILE_MODE,
+  });
+  writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: GENERATED_FILE_MODE,
+  });
 
-  return { script, data, scriptPath, dataPath };
+  return { script, data, directory, scriptPath, dataPath };
 }

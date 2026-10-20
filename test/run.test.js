@@ -4,6 +4,7 @@ import {
   chmodSync,
   existsSync,
   mkdtempSync,
+  readdirSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -102,11 +103,13 @@ test("mapK6ExitCode: termination by signal is a run failure", () => {
   assert.equal(mapK6ExitCode(null, "SIGKILL"), EXIT_K6_RUN_FAILURE);
 });
 
-// --- Generated-script temp location (locked decision 1) --------------------
+// --- Generated-script temp location (locked decision 1, SPEC-11) -----------
 
-test("generated script/data paths are specweaver-prefixed under os.tmpdir()", () => {
-  assert.equal(generatedScriptPath(), join(tmpdir(), SCRIPT_FILE_NAME));
-  assert.equal(generatedDataPath(), join(tmpdir(), DATA_FILE_NAME));
+test("generated script/data paths use the specweaver file names inside a run directory", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sw-run-"));
+  assert.equal(generatedScriptPath(dir), join(dir, SCRIPT_FILE_NAME));
+  assert.equal(generatedDataPath(dir), join(dir, DATA_FILE_NAME));
+  assert.equal(rawResultsPath(dir), join(dir, "specweaver.k6-results.ndjson"));
   assert.equal(SCRIPT_FILE_NAME, "specweaver.generated.js");
   assert.equal(DATA_FILE_NAME, "specweaver.data.json");
 });
@@ -279,6 +282,24 @@ test("runGeneratedTest removes the generated temp artifacts after the run by def
   assert.equal(existsSync(generatedDataPath(dir)), false);
 });
 
+test("runGeneratedTest removes the whole per-run directory when asked", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sw-run-"));
+  writeFileSync(generatedScriptPath(dir), "// generated\n");
+  writeFileSync(generatedDataPath(dir), "{}\n");
+  writeFileSync(rawResultsPath(dir), "{}\n");
+
+  const { impl } = spawnStub(0);
+  await runGeneratedTest({
+    command: "/fake/k6",
+    scriptPath: generatedScriptPath(dir),
+    directory: dir,
+    removeDirectory: true,
+    spawn: impl,
+  });
+
+  assert.equal(existsSync(dir), false);
+});
+
 test("runGeneratedTest keeps the temp artifacts when the keep-temp opt-out is set", async () => {
   const { dir } = dirWithExecutable();
   const scriptPath = generatedScriptPath(dir);
@@ -291,9 +312,11 @@ test("runGeneratedTest keeps the temp artifacts when the keep-temp opt-out is se
     scriptPath,
     directory: dir,
     keepTemp: true,
+    removeDirectory: true,
     spawn: impl,
   });
 
+  assert.equal(existsSync(dir), true);
   assert.equal(existsSync(scriptPath), true);
   assert.equal(existsSync(generatedDataPath(dir)), true);
 });
@@ -308,10 +331,12 @@ test("runGeneratedTest honours the keep-temp environment opt-out", async () => {
     command: "/fake/k6",
     scriptPath,
     directory: dir,
+    removeDirectory: true,
     env: { PATH: dir, [KEEP_TEMP_ENV]: "1" },
     spawn: impl,
   });
 
+  assert.equal(existsSync(dir), true);
   assert.equal(existsSync(scriptPath), true);
 });
 
@@ -356,10 +381,10 @@ function fakeK6(dir, { stdout = "", stderr = "", code = 0 } = {}) {
 
 /** Run the built CLI with a restricted PATH. */
 function runCliWithPath(configPath, pathDir, extraArgs = []) {
-  // Isolate each invocation's temp namespace (fixed temp file names under
-  // os.tmpdir(); parallel test files must not share a TMPDIR).
+  // Isolate each invocation's temp namespace: the CLI creates a unique per-run
+  // directory under TMPDIR, and parallel test files must not share one.
   const sandbox = mkdtempSync(join(tmpdir(), "sw-tmp-"));
-  return spawnSync(
+  const result = spawnSync(
     process.execPath,
     [cliPath, "--config", configPath, ...extraArgs],
     {
@@ -367,6 +392,8 @@ function runCliWithPath(configPath, pathDir, extraArgs = []) {
       env: { ...process.env, PATH: pathDir, TMPDIR: sandbox },
     },
   );
+  // Expose the sandbox so tests can assert the CLI cleaned it out.
+  return { ...result, tempSandbox: sandbox };
 }
 
 test("built CLI prints a single clear k6-missing error and exits non-zero", () => {
@@ -398,6 +425,22 @@ test("built CLI checks presence and forwards a zero k6 exit as success", () => {
   assert.match(result.stdout, /k6 found:/);
   // k6's own stdout is streamed through to the CLI's stdout in real time.
   assert.match(result.stdout, /FAKE_K6_STDOUT/);
+});
+
+test("built CLI removes its unique per-run temp directory after the run", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sw-cli-run-"));
+  const configPath = writeConfig(dir);
+  const binDir = mkdtempSync(join(tmpdir(), "sw-bin-"));
+  fakeK6(binDir, { stdout: "FAKE_K6_STDOUT", code: 0 });
+
+  const result = runCliWithPath(configPath, binDir, [
+    "--out",
+    join(dir, "results.json"),
+  ]);
+
+  assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+  // The per-run directory (script/data/raw metrics) is gone after the run.
+  assert.deepEqual(readdirSync(result.tempSandbox), []);
 });
 
 test("built CLI maps a non-zero k6 exit and surfaces it without swallowing", () => {

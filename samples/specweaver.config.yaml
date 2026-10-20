@@ -7,9 +7,11 @@
 #
 # The full config schema is documented in README.md.
 
-# OpenAPI source(s) to load. Optional; string or list of strings.
-# May also be overridden per run with `baseUrl` (see the README) to point the
-# generated tests at a different host without editing the spec.
+# OpenAPI source(s) to load. Local file paths only (URLs are not fetched).
+# Required to execute; string or list of strings.
+# Requests default to the spec's first `servers[].url`. Add an optional
+# `baseUrl:` (see the README) to point the generated tests at a different host
+# without editing the spec.
 specs:
   - samples/petstore.openapi.json
 

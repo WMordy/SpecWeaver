@@ -60,14 +60,37 @@ function writeWarnings(warnings: readonly string[]): void {
 }
 
 /**
+ * Report payload overrides on a path where no operation will be built (SPEC-13).
+ *
+ * Both the no-`specs` and zero-selected early returns happen before request-data
+ * generation, so no generated request can match an override. Running the normal
+ * override matcher with an empty request list makes every configured override
+ * "unmatched", which is the truth for that run: the override cannot be applied.
+ * This keeps the "never silently drop an override" contract on those paths too,
+ * without changing their exit code.
+ */
+function writeUnappliedPayloadWarnings(payloads: Config["payloads"]): void {
+  writeWarnings(applyPayloadOverrides([], payloads).warnings);
+}
+
+/** The result of matching configured operations against the loaded catalog. */
+interface OperationSelection {
+  /** Operations present in the catalog; the ones that will be executed. */
+  selected: OperationEntry[];
+  /** Configured operations absent from the catalog, in config order. */
+  unmatched: { method: string; path: string }[];
+}
+
+/**
  * Select the config's opt-in operations from the loaded spec catalog, matching
  * on method + path. Operations listed in the config but absent from the
- * spec(s) are reported and skipped (they can never be built).
+ * spec(s) are returned as `unmatched` so the caller can warn (partial match) or
+ * fail (no match at all) without losing the list.
  */
 function selectOperations(
   operations: readonly { method: string; path: string }[],
   specs: readonly LoadedSpec[],
-): OperationEntry[] {
+): OperationSelection {
   const catalog = new Map<string, OperationEntry>();
   for (const spec of specs) {
     for (const operation of spec.operations) {
@@ -76,17 +99,16 @@ function selectOperations(
   }
 
   const selected: OperationEntry[] = [];
+  const unmatched: { method: string; path: string }[] = [];
   for (const { method, path } of operations) {
     const operation = catalog.get(`${method} ${path}`);
     if (operation === undefined) {
-      process.stderr.write(
-        `${WARNING_PREFIX} operation "${method} ${path}" is not present in the loaded spec(s); skipping.\n`,
-      );
+      unmatched.push({ method, path });
       continue;
     }
     selected.push(operation);
   }
-  return selected;
+  return { selected, unmatched };
 }
 
 /**
@@ -155,16 +177,45 @@ async function run(options: CliOptions): Promise<number> {
     );
   }
 
-  // Without a spec there is no operation catalog to build requests from, so
-  // there is nothing to execute (the no-specs case is deferred to SPEC-3).
+  // A spec source is required to build an operation catalog. `operations` is
+  // always non-empty, so omitting `specs` can never execute anything: fail
+  // loudly (SPEC-14, reversing SPEC-2's optional decision) instead of exiting
+  // `0` without running k6 or writing results. Payload overrides are still
+  // reported before the early return (SPEC-13).
   if (config.specs === undefined) {
-    return EXIT_SUCCESS;
+    writeUnappliedPayloadWarnings(config.payloads);
+    process.stderr.write(
+      [
+        "error: `specs` is required to execute operations, but no spec source is configured.",
+        "Add at least one OpenAPI file under `specs` in the config; operations cannot be matched or run without a loaded spec.",
+      ].join("\n") + "\n",
+    );
+    return EXIT_SPECWEAVER_ERROR;
   }
 
-  const selected = selectOperations(config.operations, loadedSpecs);
+  const { selected, unmatched } = selectOperations(
+    config.operations,
+    loadedSpecs,
+  );
   if (selected.length === 0) {
-    process.stdout.write("No operations to run; nothing to execute.\n");
-    return EXIT_SUCCESS;
+    writeUnappliedPayloadWarnings(config.payloads);
+    process.stderr.write(
+      [
+        "error: none of the configured operations were found in the loaded spec(s); nothing to execute.",
+        "Unmatched operations:",
+        ...unmatched.map(({ method, path }) => `  - ${method} ${path}`),
+        "Add the missing operations to the spec(s) or correct the `operations` entries in the config.",
+      ].join("\n") + "\n",
+    );
+    return EXIT_SPECWEAVER_ERROR;
+  }
+
+  // A partial match still runs: report each operation that could not be built,
+  // then continue with the ones that were selected.
+  for (const { method, path } of unmatched) {
+    process.stderr.write(
+      `${WARNING_PREFIX} operation "${method} ${path}" is not present in the loaded spec(s); skipping.\n`,
+    );
   }
 
   // SPEC-7 preflight: k6 must resolve on PATH before we execute anything. It is

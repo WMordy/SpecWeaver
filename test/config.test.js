@@ -55,7 +55,11 @@ test("operations entries are normalized to the pinned { method, path } shape", (
   assert.deepEqual(Object.keys(config.operations[0]), ["method", "path"]);
 });
 
-test("specs is optional and its absence does not fail validation", () => {
+test("specs parses as optional; the CLI requires a spec source before executing operations", () => {
+  // SPEC-14 deliberately reverses SPEC-2's optionality at the CLI boundary:
+  // parsing keeps `specs` optional so the CLI can report a dedicated no-run
+  // error (with SPEC-13 payload warnings), but `operations` without `specs`
+  // exits 2 instead of running. See test/cli.test.js.
   const { config } = parseConfig("operations:\n  - method: GET\n    path: /pets\n");
   assert.equal(config.specs, undefined);
   assert.deepEqual(config.operations, [{ method: "GET", path: "/pets" }]);

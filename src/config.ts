@@ -94,7 +94,14 @@ export interface PayloadOverride {
  * This is the single typed contract for the whole CLI: it contains no `any`.
  */
 export interface Config {
-  /** OpenAPI source path(s)/URL(s). Absent when the config omits `specs`. */
+  /**
+   * Local OpenAPI source path(s) (JSON or YAML) to load; URLs are not fetched.
+   * Required to execute: `operations` is always non-empty, and without a spec
+   * there is no catalog to match it against, so the CLI exits `2` before
+   * running k6 or writing results (SPEC-14). Parsing still permits omission so
+   * that no-run error can be reported at the CLI boundary, alongside any
+   * SPEC-13 payload warnings.
+   */
   specs?: string[];
   /** Opt-in operations. Never empty for a validated config. */
   operations: OperationConfig[];

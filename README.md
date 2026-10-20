@@ -87,7 +87,7 @@ specweaver --config <path> [options]
 Config input is YAML via `--config` only (no JSON/TOML, no config discovery).
 
 ```yaml
-specs:                      # OPTIONAL, string or list of strings
+specs:                      # REQUIRED to execute, local path(s) or list (no URLs)
   - ./openapi.yaml
 operations:                 # REQUIRED, non-empty list of { method, path }
   - method: GET
@@ -109,7 +109,7 @@ load:                       # OPTIONAL, default vus/duration
 
 | Field | Required | Type | Description |
 | --- | --- | --- | --- |
-| `specs` | no | string \| string[] | Local OpenAPI 3.0/3.1 file path(s) to load (JSON or YAML). Paths resolve against the current working directory. |
+| `specs` | **yes** | string \| string[] | Local OpenAPI 3.0/3.1 file path(s) to load (JSON or YAML); URLs are **not** fetched. At least one source is required because `operations` is always non-empty; paths resolve against the current working directory. |
 | `operations` | **yes** | `{ method, path }[]` | The opt-in operations to test. Must be non-empty; only these are ever run. |
 | `baseUrl` | no | string | Request base URL. Overrides the spec's first `servers[].url`. |
 | `auth` | no | mapping | Static auth applied to **every** selected operation: `token` (emits `Authorization: Bearer <token>`) and/or `headers` (name → value). Values support `${ENV_VAR}`. |
@@ -183,14 +183,14 @@ with the live k6 output.
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Success — k6 exited `0`. |
+| `0` | Success — k6 ran and exited `0` (`--help` and `--version` also exit `0`). |
 | `1` | k6 run/script failure — k6 ran but exited non-zero (or was terminated by a signal). |
-| `2` | SpecWeaver-level error — invalid/missing config, a spec/validation failure, a preflight failure (including "k6 not found"), or an internal error. k6 is not run. |
+| `2` | SpecWeaver-level error — invalid/missing config, a config with no `specs` or no matching operations (nothing ran), a spec/validation failure, a preflight failure (including "k6 not found"), or an internal error. k6 is not run. |
 
-SpecWeaver exits `0` only when k6 exited `0`; any non-zero k6 exit yields a
-non-zero SpecWeaver exit and is never converted to success. SLA `thresholds` and
-pass/fail gating on metrics are out of scope for v1 — a failing `check` is
-informational only.
+For an actual run, SpecWeaver exits `0` only when it ran k6 and k6 exited `0`;
+any non-zero k6 exit yields a non-zero SpecWeaver exit and is never converted to
+success. SLA `thresholds` and pass/fail gating on metrics are out of scope for
+v1 — a failing `check` is informational only.
 
 An unexpected **internal** error is reported as a single clean, actionable
 message on stderr (never a raw stack trace, and never secret material) and exits

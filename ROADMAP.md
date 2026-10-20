@@ -9,9 +9,21 @@ priorities change; the Kanban board remains the source of truth for ticket statu
 
 ## Where we are
 
-SPEC-1 through SPEC-16 are `done`. The v1 audit scored **10 Met / 1 Partial / 0
-Missing**; the Partial (`payloads`) and the audit's trust gaps are now fixed by
-P0:
+SPEC-1 through SPEC-21 are `done` at P1 close. As of this refresh SPEC-17,
+SPEC-18, SPEC-19, and SPEC-20 are `done`; SPEC-21 (this ticket) is the final P1
+item, left `in_progress` for review and closing P1 when it lands.
+
+P0 is committed on `master` (the working tree was clean at P1 open). The four P0
+commits are present in history, followed by the P0 roadmap commit:
+
+- SPEC-13 `96363cf` — Apply YAML payload overrides to generated requests
+- SPEC-14 `1c30e7b` — Fail loudly when a run would execute no operations
+- SPEC-15 `c3c139b` — Warn on specs that contribute zero operations
+- SPEC-16 `39c9c3e` — Align docs with shipped behavior
+- Roadmap `c92c2d6` — Add P0 roadmap for agent handoff
+
+The v1 audit scored **10 Met / 1 Partial / 0 Missing**; the Partial (`payloads`)
+and the audit's trust gaps were fixed by P0:
 
 1. `payloads[].body` now replaces the generated body; unsupported keys are
    rejected and unmatched overrides warn (SPEC-13).
@@ -21,8 +33,16 @@ P0:
    exit-`2` no-run path (SPEC-15).
 4. README, config JSDoc, and the sample now match actual behavior (SPEC-16).
 
-Verification at P0 close: `npm run build` clean, `npm test` 224/224 passing,
-including the k6 e2e (k6 present on this machine). Changes are uncommitted.
+P1 (SPEC-17…21) proved the project works end to end: GitHub Actions CI builds
+and tests every push/PR (SPEC-17), the k6 e2e is mandatory in CI rather than
+skipped (SPEC-18), `--fail-on-check-failure` provides opt-in check gating
+(SPEC-19), and the README documents the flag and exit-code behavior (SPEC-20).
+SPEC-21 is this verified roadmap refresh.
+
+Verification at P1 close: `npm run build` clean (`tsc` exits 0); `npm test`
+passes **240/240** tests with **0 failed and 0 skipped**, including the k6
+end-to-end test (k6 v2.3.0 present on this machine; the e2e executed, it was not
+skipped). That total is 16 tests above P0's 224, added by SPEC-18 and SPEC-19.
 
 ## Work order (do not reorder without updating this file)
 
@@ -90,18 +110,40 @@ Dependencies (resolved):
 - Verify every README field/flag against `src/args.ts`, `src/config.ts`,
   `src/cli.ts`.
 
-### P1 — prove it works (next)
+### P1 — prove it works (complete)
 
-P0 is complete. Do not start a P1 item without a ticket; create it through the
+P1 is complete. Do not start a P2 item without a ticket; create it through the
 normal pipeline and update this file first.
 
-1. **K6 e2e in CI.** `test/e2e.test.js:127-128` skips without `k6`. Install k6
-   in the pipeline so end-to-end execution is mandatory in CI.
-2. **Gating story.** Checks are informational; a 100%-failed run exits `0`.
-   Either add `--fail-on-check-failure` or document a `results.json`-based CI
-   gate. Decide with the product owner before implementing.
+| Order | Key | Ticket ID | Priority | Status | Title |
+|---|---|---|---|---|---|
+| 1 | SPEC-17 | `01M5CNVCMCM78PF6P5BCKZGED1` | high | done | Add GitHub Actions CI workflow for build and tests |
+| 2 | SPEC-18 | `01M5CNVD8DQ1QZHY5PK4XWQWF8` | high | done | Make the k6 e2e mandatory in CI |
+| 3 | SPEC-19 | `01M5CNVDP4T9SGPEMSTFBXWGQT` | high | done | Add --fail-on-check-failure gating flag |
+| 4 | SPEC-20 | `01M5CNVE4DZCKH6AG8WNK967H2` | medium | done | Document check gating and exit-code behavior |
+| 5 | SPEC-21 | `01M5CNVESWZQN027V0CSSK08SY` | low | in_progress | Refresh ROADMAP with verified P0 record and P1 plan |
 
-### P2 — integration convenience (after P1)
+Statuses are the board state at execution time (2026-10-20). SPEC-21 leaves
+`in_progress` for review; it is `done` once the reviewer closes it, which closes
+P1.
+
+Dependencies (resolved):
+
+- SPEC-17 (CI workflow) is the prerequisite for observing SPEC-18 in CI. The
+  SPEC-18 change is test-side and can land independently, but the
+  mandatory-e2e guarantee is only exercised once SPEC-17's workflow runs it.
+- SPEC-19 (the gating flag) precedes SPEC-20 (the README docs) because the docs
+  must describe shipped behaviour, not a plan.
+- SPEC-21 is last: it records the verified outcome of SPEC-17…20, so it cannot
+  be written before they are `done`.
+
+**Gating decision (resolved).** Checks remain informational by default, so a
+run with failing checks still exits `0` unless the user opts in. The chosen gate
+is the opt-in, CLI-only `--fail-on-check-failure` flag (SPEC-19), documented for
+users in the README (SPEC-20). There is no `results.json`-based external gate in
+v1, and no product-owner decision remains open for P1.
+
+### P2 — integration convenience (next)
 
 1. **Operation selection:** support `operationId`, `tags`, or an `all` selector
    plus tolerant method/path matching, so teams stop hand-enumerating every
@@ -127,8 +169,8 @@ unless the product owner reopens them. Do not create tickets for them here.
 4. Update subtasks as you complete them; leave the ticket `in_progress` for
    review unless the workflow says otherwise.
 5. Run the reviewer before calling a ticket done.
-6. After completing P0, update this roadmap's "Where we are" section and check
-   off the ticket in the order table (or note its status).
+6. After completing any phase, update this roadmap's "Where we are" section and
+   check off that phase's tickets in its order table (or note their status).
 7. Never commit unless the user explicitly asks. Never modify other tickets or
    the project description.
 
@@ -144,4 +186,8 @@ unless the product owner reopens them. Do not create tickets for them here.
 
 - 2026-10-20: Created. P0 defined from SPEC-12 audit; SPEC-13…16 created.
 - 2026-10-20: P0 complete. SPEC-13…16 approved and `done`; build clean,
-  224/224 tests passing (including k6 e2e). P1 is next; changes uncommitted.
+  224/224 tests passing (including k6 e2e). P1 was next.
+- 2026-10-20: P1 complete. SPEC-17…20 approved and `done`; SPEC-21 roadmap
+  refresh in review. P0 is recorded as committed (`96363cf`, `1c30e7b`,
+  `c3c139b`, `39c9c3e`, roadmap `c92c2d6`). `npm run build` clean;
+  `npm test` 240/240 passing, 0 skipped, including the k6 e2e. P2 is next.

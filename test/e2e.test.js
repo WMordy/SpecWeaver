@@ -13,9 +13,24 @@
  * for standalone runs this file builds the CLI only if `dist/cli.js` is missing,
  * so it never races a concurrent rebuild in the normal `npm test` flow.
  *
- * Per SPEC-9 decision 3 the test is conditional: it SKIPS gracefully (via the
- * `node:test` skip mechanism, reported by `node --test`) when the `k6` binary is
- * not on PATH, so the suite is green with k6 either present or absent.
+ * Per SPEC-9 decision 3 the test is conditional on the `k6` binary. The
+ * decision itself is made by the pure helper in `support/k6-requirement.js`
+ * (SPEC-18):
+ *
+ * - k6 available -> run the test as usual, regardless of environment.
+ * - k6 absent + k6 optional -> SKIP gracefully (via the `node:test` skip
+ *   mechanism, reported by `node --test`) with the SPEC-9 message, so a
+ *   k6-less local suite stays green.
+ * - k6 absent + k6 REQUIRED -> do not skip; the test FAILS with a message
+ *   naming k6 as required, reporting that the `k6 version` probe failed, and
+ *   explaining how to install k6. That makes `npm test` and the CI job exit
+ *   non-zero instead of reporting a false green.
+ *
+ * k6 is required when either environment variable is truthy (anything other
+ * than unset/empty, `0`, or `false`, case-insensitive):
+ *
+ * - `CI` — GitHub Actions sets `CI=true` automatically (SPEC-17 workflow);
+ * - `SPECWEAVER_REQUIRE_K6=1` — explicit override for use outside CI.
  *
  * The generated script/data live in a unique per-run directory under
  * `os.tmpdir()` (SPEC-6 A2, hardened by SPEC-11), and `node --test` runs test
@@ -34,6 +49,7 @@ import { fileURLToPath } from "node:url";
 
 import { loadConfig } from "../dist/config.js";
 import { loadSpec } from "../dist/spec.js";
+import { k6Requirement } from "./support/k6-requirement.js";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const cliPath = join(repoRoot, "dist", "cli.js");
@@ -62,6 +78,7 @@ if (!existsSync(cliPath)) {
 
 const k6Available =
   spawnSync("k6", ["version"], { encoding: "utf8" }).status === 0;
+const k6Decision = k6Requirement(k6Available, process.env);
 
 /** Run the built CLI asynchronously (so the in-test server can serve while it runs). */
 function runCli(args, options = {}) {
@@ -125,11 +142,15 @@ test("the committed sample config passes --config validation (SPEC-9 AC 2)", () 
 test(
   "end-to-end: built CLI loads the sample spec, generates, emits, and runs k6 against a local mock server",
   {
-    skip: k6Available
-      ? false
-      : "k6 binary not found on PATH; skipping the end-to-end run",
+    skip: k6Decision.action === "skip" ? k6Decision.reason : false,
   },
   async () => {
+    // Absent + required (CI or SPECWEAVER_REQUIRE_K6): fail loudly instead of
+    // skipping, so a k6-less CI job cannot report green (SPEC-18).
+    if (k6Decision.action === "fail") {
+      assert.fail(k6Decision.reason);
+    }
+
     const received = [];
     const server = http.createServer((req, res) => {
       let body = "";

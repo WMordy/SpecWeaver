@@ -10,8 +10,7 @@ priorities change; the Kanban board remains the source of truth for ticket statu
 ## Where we are
 
 SPEC-1 through SPEC-21 are `done` at P1 close. As of this refresh SPEC-17,
-SPEC-18, SPEC-19, and SPEC-20 are `done`; SPEC-21 (this ticket) is the final P1
-item, left `in_progress` for review and closing P1 when it lands.
+SPEC-18, SPEC-19, SPEC-20, and SPEC-21 (this ticket) are all `done`, closing P1.
 
 P0 is committed on `master` (the working tree was clean at P1 open). The four P0
 commits are present in history, followed by the P0 roadmap commit:
@@ -121,11 +120,10 @@ normal pipeline and update this file first.
 | 2 | SPEC-18 | `01M5CNVD8DQ1QZHY5PK4XWQWF8` | high | done | Make the k6 e2e mandatory in CI |
 | 3 | SPEC-19 | `01M5CNVDP4T9SGPEMSTFBXWGQT` | high | done | Add --fail-on-check-failure gating flag |
 | 4 | SPEC-20 | `01M5CNVE4DZCKH6AG8WNK967H2` | medium | done | Document check gating and exit-code behavior |
-| 5 | SPEC-21 | `01M5CNVESWZQN027V0CSSK08SY` | low | in_progress | Refresh ROADMAP with verified P0 record and P1 plan |
+| 5 | SPEC-21 | `01M5CNVESWZQN027V0CSSK08SY` | low | done | Refresh ROADMAP with verified P0 record and P1 plan |
 
-Statuses are the board state at execution time (2026-10-20). SPEC-21 leaves
-`in_progress` for review; it is `done` once the reviewer closes it, which closes
-P1.
+Statuses are the board state at execution time (2026-10-20). All five P1 tickets
+are `done`; P1 is closed.
 
 Dependencies (resolved):
 
@@ -187,7 +185,7 @@ unless the product owner reopens them. Do not create tickets for them here.
 - 2026-10-20: Created. P0 defined from SPEC-12 audit; SPEC-13…16 created.
 - 2026-10-20: P0 complete. SPEC-13…16 approved and `done`; build clean,
   224/224 tests passing (including k6 e2e). P1 was next.
-- 2026-10-20: P1 complete. SPEC-17…20 approved and `done`; SPEC-21 roadmap
-  refresh in review. P0 is recorded as committed (`96363cf`, `1c30e7b`,
+- 2026-10-20: P1 complete. SPEC-17…21 approved and `done`; SPEC-21 roadmap
+  refresh approved. P0 is recorded as committed (`96363cf`, `1c30e7b`,
   `c3c139b`, `39c9c3e`, roadmap `c92c2d6`). `npm run build` clean;
   `npm test` 240/240 passing, 0 skipped, including the k6 e2e. P2 is next.

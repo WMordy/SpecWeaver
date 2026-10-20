@@ -519,3 +519,23 @@ export function loadSpec(source: string): LoadedSpec {
 export function loadSpecs(sources: string[]): LoadedSpec[] {
   return sources.map((source) => loadSpec(source));
 }
+
+/**
+ * Non-fatal warnings for loaded specs that contributed no operations (SPEC-15).
+ *
+ * The catalog is built exclusively from `document.paths`
+ * ({@link buildOperationCatalog}). OpenAPI 3.1 permits a valid document with
+ * only `webhooks` or only `components`, so such a spec loads successfully yet
+ * yields zero operations. Rather than let that pass silently, each zero-catalog
+ * source is named in a warning explaining the v1 limitation. Webhooks are not
+ * catalogued here; the run-level failure for an empty overall catalog remains
+ * the CLI's no-operations path (SPEC-14).
+ */
+export function zeroOperationWarnings(specs: readonly LoadedSpec[]): string[] {
+  return specs
+    .filter((spec) => spec.operations.length === 0)
+    .map(
+      (spec) =>
+        `spec "${spec.source}" contributes zero operations: only \`paths\` operations are supported, so OpenAPI 3.1 \`webhooks\` and components-only documents are not catalogued in v1.`,
+    );
+}

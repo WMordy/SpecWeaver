@@ -200,6 +200,98 @@ payloads:
   assert.equal(existsSync(resultsPath), false);
 });
 
+test("built CLI warns and exits 2 when a webhooks-only 3.1 spec yields zero operations", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writeSpec31(dir, {
+    openapi: "3.1.0",
+    info: { title: "Hooks", version: "1" },
+    webhooks: {
+      newPet: {
+        post: { responses: { "200": { description: "ok" } } },
+      },
+    },
+  });
+  const configPath = join(dir, "specweaver.yaml");
+  const resultsPath = join(dir, "results.json");
+  writeFileSync(
+    configPath,
+    `specs:\n  - ${specPath}\noperations:\n  - method: GET\n    path: /pets\n`,
+  );
+
+  const result = runCli(["--config", configPath, "--out", resultsPath]);
+
+  assert.equal(result.status, EXIT_SPECWEAVER_ERROR, result.stderr);
+  assert.ok(result.stderr.includes(specPath), result.stderr);
+  assert.match(
+    result.stderr,
+    /warning: spec ".*openapi31\.json" contributes zero operations/,
+  );
+  assert.match(result.stderr, /only `paths` operations are supported/);
+  assert.match(
+    result.stderr,
+    /OpenAPI 3\.1 `webhooks` and components-only documents are not catalogued in v1/,
+  );
+  // SPEC-14's no-run path still fails the run and writes no results file.
+  assert.match(result.stderr, /none of the configured operations were found/);
+  assert.doesNotMatch(result.stdout, /SpecWeaver run summary/);
+  assert.equal(existsSync(resultsPath), false);
+});
+
+test("built CLI warns and exits 2 when a components-only 3.1 spec yields zero operations", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writeSpec31(dir, {
+    openapi: "3.1.0",
+    info: { title: "Components", version: "1" },
+    components: { schemas: { Pet: { type: "object" } } },
+  });
+  const configPath = join(dir, "specweaver.yaml");
+  const resultsPath = join(dir, "results.json");
+  writeFileSync(
+    configPath,
+    `specs:\n  - ${specPath}\noperations:\n  - method: GET\n    path: /pets\n`,
+  );
+
+  const result = runCli(["--config", configPath, "--out", resultsPath]);
+
+  assert.equal(result.status, EXIT_SPECWEAVER_ERROR, result.stderr);
+  assert.ok(result.stderr.includes(specPath), result.stderr);
+  assert.match(
+    result.stderr,
+    /warning: spec ".*openapi31\.json" contributes zero operations/,
+  );
+  assert.match(result.stderr, /only `paths` operations are supported/);
+  assert.match(
+    result.stderr,
+    /OpenAPI 3\.1 `webhooks` and components-only documents are not catalogued in v1/,
+  );
+  assert.match(result.stderr, /none of the configured operations were found/);
+  assert.doesNotMatch(result.stdout, /SpecWeaver run summary/);
+  assert.equal(existsSync(resultsPath), false);
+});
+
+test("built CLI emits no zero-operation warning for a normal paths spec", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writeSpec(dir);
+  const configPath = join(dir, "specweaver.yaml");
+  const resultsPath = join(dir, "results.json");
+  writeFileSync(
+    configPath,
+    `specs:\n  - ${specPath}\noperations:\n  - method: GET\n    path: /pets\n`,
+  );
+
+  const binDir = mkdtempSync(join(tmpdir(), "specweaver-bin-"));
+  writeFakeK6(binDir, 0);
+  const sandbox = mkdtempSync(join(tmpdir(), "specweaver-tmp-"));
+  const result = runCli(["--config", configPath, "--out", resultsPath], {
+    env: { ...process.env, PATH: binDir, TMPDIR: sandbox },
+  });
+
+  assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+  assert.doesNotMatch(result.stderr, /contributes zero operations/);
+  assert.match(result.stdout, /SpecWeaver run summary/);
+  assert.equal(existsSync(resultsPath), true);
+});
+
 test("built CLI runs a partial match, warns about unmatched entries, and returns k6's exit code", () => {
   const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
   const specPath = writeSpec(dir);

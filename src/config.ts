@@ -6,16 +6,24 @@
  * resolves `${ENV_VAR}` references in auth fields. The single validated
  * {@link Config} object it produces is consumed by every downstream ticket
  * (SPEC-3 spec loading, SPEC-4 request-data generation, SPEC-5 auth, SPEC-6
- * script emission, SPEC-7/8 execution and results). The `payloads` field is
- * parsed and validated but is reserved/unused in v1.
+ * script emission, SPEC-7/8 execution and results). `payloads` entries carry a
+ * whole-value JSON `body` replacement for the matching operation.
  *
  * Config input is YAML only. JSON/TOML input and config-file discovery are
- * intentionally not supported.
+ * intentionally not supported. `specs` entries are local filesystem paths only:
+ * remote `http(s)://` URLs are not fetched.
+ *
+ * `specs` is required to execute: because `operations` is required and
+ * non-empty (SPEC-2), a config that omits `specs` can never run anything. This
+ * deliberately reverses SPEC-2's "specs is optional" decision (SPEC-14). The
+ * parser keeps `specs` optional so the CLI can emit its dedicated no-run error
+ * (and SPEC-13 payload warnings) instead of a generic schema error; the CLI
+ * exits `2` before running k6 or writing results.
  *
  * Schema:
  *
  * ```yaml
- * specs:                      # OPTIONAL, string or list of strings
+ * specs:                      # REQUIRED to execute, local path(s) or list (no URLs)
  *   - ./openapi.yaml
  * operations:                 # REQUIRED, non-empty list of { method, path }
  *   - method: GET

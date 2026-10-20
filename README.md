@@ -117,6 +117,34 @@ load:                       # OPTIONAL, default vus/duration
 | `output` | no | string | Results JSON path (see "Results file"). `--out` overrides it. |
 | `load` | no | `{ vus, duration }` | Default load profile. `--vus` / `--duration` override it. Defaults to `vus: 1`, `duration: 30s`. |
 
+`specs` is **required** to execute: `operations` must be non-empty, and without
+a spec there is no catalog to match those operations against. A config that
+lists operations but omits `specs` exits `2` without running k6 or writing a
+results file. `specs` entries are local filesystem paths only; SpecWeaver does
+not download or resolve `http(s)://` URLs.
+
+If every configured operation is missing from the loaded spec(s), SpecWeaver
+also exits `2`, lists each unmatched `{ method, path }`, and writes no results
+file. If only some operations match, the matching ones still run; each unmatched
+entry is reported on stderr as a warning and the run returns k6's exit code.
+
+Only operations declared under `paths` are catalogued. OpenAPI 3.1 allows a
+valid document with only `webhooks` or only `components`, so such a spec is
+accepted by the loader but yields no operations. SpecWeaver warns on stderr,
+naming the source and stating that 3.1 `webhooks` and components-only documents
+are not catalogued in v1. If that leaves no operation for the run to execute,
+the exit-`2` no-operations path above applies and no results file is written.
+
+`payloads` overrides are applied before auth injection. For an operation whose
+normalized `method` + `path` matches an entry, the configured `body` becomes the
+request's JSON body **in place of** the body generated from the spec
+(example/default/faker) — it is a whole-value replacement, not a partial merge.
+If the operation produced no JSON body, the override supplies one. `get /pets`
+and `GET /pets` are equivalent. An override that matches no selected operation
+is reported on stderr with a `warning:` prefix and does not fail the run. Only
+`method`, `path`, and `body` are supported; other keys (e.g. `query` or
+`headers`) are a config error rather than being silently ignored.
+
 `${ENV_VAR}` references are resolved from the process environment. An
 **unresolved** variable is non-fatal: SpecWeaver prints a warning to **stderr**
 prefixed with `warning:` (e.g. `warning: unresolved environment variable "API_KEY"

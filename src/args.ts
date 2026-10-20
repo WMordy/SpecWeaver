@@ -2,9 +2,10 @@
  * Argument parsing for the SpecWeaver CLI.
  *
  * This module owns the parsing of the four core flags (`--config`, `--vus`,
- * `--duration`, `--out`) plus `--help`/`--version`, and nothing else. The
- * requiredness/defaults of `--config`/`--out` are enforced by later tickets
- * (SPEC-2/SPEC-7/SPEC-8), not here.
+ * `--duration`, `--out`) plus the opt-in `--fail-on-check-failure` gate and
+ * `--help`/`--version`, and nothing else. The requiredness/defaults of
+ * `--config`/`--out` are enforced by later tickets (SPEC-2/SPEC-7/SPEC-8), not
+ * here.
  */
 
 /** Structured options produced by {@link parseArgs}, ready for the command handler. */
@@ -17,6 +18,11 @@ export interface CliOptions {
   duration?: string;
   /** Results output file path (`--out`). */
   out?: string;
+  /**
+   * Exit non-zero when any recorded check failed (`--fail-on-check-failure`).
+   * Defaults to `false`: check failures stay informational unless opted into.
+   */
+  failOnCheckFailure: boolean;
   /** `--help` was requested. */
   help: boolean;
   /** `--version` was requested. */
@@ -42,6 +48,8 @@ Options:
   --vus <n>           Number of virtual users (positive integer)
   --duration <time>   k6-style load duration, e.g. 30s or 1m30s
   --out <path>        Path to write the results file
+  --fail-on-check-failure
+                      Exit non-zero when any recorded check fails
   --help              Print this usage information
   --version           Print the version number`;
 
@@ -61,12 +69,20 @@ function requireValue(flag: string, value: string | undefined): string {
  * @throws {CliUsageError} on an unknown flag, a missing value, or an invalid value.
  */
 export function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { help: false, version: false };
+  const options: CliOptions = {
+    failOnCheckFailure: false,
+    help: false,
+    version: false,
+  };
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]!;
 
     switch (arg) {
+      case "--fail-on-check-failure":
+        options.failOnCheckFailure = true;
+        break;
+
       case "--help":
         options.help = true;
         break;

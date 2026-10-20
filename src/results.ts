@@ -39,8 +39,8 @@
  * ## What this module does NOT do
  *
  * - It does not run k6 or stream its output (SPEC-7).
- * - It does not apply SLA thresholds or gate on metrics (deferred project-wide;
- *   a failing `check` stays informational).
+ * - It does not apply SLA thresholds or gate on metrics (deferred project-wide).
+ *   The only gate is the opt-in {@link resolveRunExitCode} check-failure switch.
  * - It does not parse arbitrary raw k6 timeseries beyond the handful of metrics
  *   the summary and results JSON need.
  */
@@ -287,6 +287,48 @@ export function resolveResultsPath(paths: {
 /** Map k6's raw exit code onto the run outcome (A4). */
 export function outcomeForK6ExitCode(k6ExitCode: number | null): RunOutcome {
   return k6ExitCode === 0 ? "success" : "run_failure";
+}
+
+/** Inputs to {@link resolveRunExitCode}. */
+export interface RunExitCodeInput {
+  /** k6's raw exit code (`null` when k6 was terminated by a signal). */
+  k6ExitCode: number | null;
+  /** The aggregate recorded check counts (`summary.checks`). */
+  checks: CheckCounts;
+  /** Whether `--fail-on-check-failure` was set. */
+  failOnCheckFailure: boolean;
+}
+
+/**
+ * Resolve SpecWeaver's process exit code from k6's outcome and the recorded
+ * check counts (SPEC-19).
+ *
+ * This is the opt-in bridge that promotes recorded check failures into the
+ * k6-run-failure code:
+ *
+ * - any non-zero k6 exit (including a signal, `null`) stays
+ *   {@link EXIT_K6_RUN_FAILURE} — the gate never upgrades or masks it;
+ * - with `failOnCheckFailure` set, at least one failing check out of a non-zero
+ *   number of executed checks yields {@link EXIT_K6_RUN_FAILURE};
+ * - with the flag absent, or zero checks executed, a successful k6 run yields
+ *   {@link EXIT_SUCCESS} exactly as before.
+ *
+ * Pure and side-effect free, so the full matrix is unit-testable without
+ * spawning k6.
+ */
+export function resolveRunExitCode(input: RunExitCodeInput): number {
+  if (input.k6ExitCode !== EXIT_SUCCESS) {
+    return EXIT_K6_RUN_FAILURE;
+  }
+  const totalChecks = input.checks.pass + input.checks.fail;
+  if (
+    input.failOnCheckFailure &&
+    totalChecks > 0 &&
+    input.checks.fail > 0
+  ) {
+    return EXIT_K6_RUN_FAILURE;
+  }
+  return EXIT_SUCCESS;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

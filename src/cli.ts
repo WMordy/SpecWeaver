@@ -16,11 +16,13 @@ import {
 } from "./run.js";
 import {
   buildResultsFile,
+  EXIT_K6_RUN_FAILURE,
   formatSummary,
   formatUnexpectedError,
   formatWarnings,
   outcomeForK6ExitCode,
   resolveResultsPath,
+  resolveRunExitCode,
   WARNING_PREFIX,
   writeResultsFile,
 } from "./results.js";
@@ -312,7 +314,28 @@ async function run(options: CliOptions): Promise<number> {
     // A7: printed once, after k6 exits, so it never interleaves with the
     // live-streamed k6 output.
     process.stdout.write(formatSummary(resultsFile));
-    return runResult.exitCode;
+
+    // SPEC-19: the opt-in check gate runs last, after the results file has been
+    // written and the summary printed. A genuine non-zero k6 outcome is kept
+    // as-is; only a k6-success run can be promoted to the failure code.
+    const exitCode =
+      runResult.exitCode === EXIT_SUCCESS
+        ? resolveRunExitCode({
+            k6ExitCode: runResult.k6ExitCode,
+            checks: resultsFile.summary.checks,
+            failOnCheckFailure: options.failOnCheckFailure,
+          })
+        : runResult.exitCode;
+
+    if (exitCode !== EXIT_SUCCESS && runResult.exitCode === EXIT_SUCCESS) {
+      const { fail } = resultsFile.summary.checks;
+      const noun = fail === 1 ? "check" : "checks";
+      process.stderr.write(
+        `error: --fail-on-check-failure: ${fail} failing ${noun} recorded; exiting with code ${EXIT_K6_RUN_FAILURE}.\n`,
+      );
+    }
+
+    return exitCode;
   } catch (error) {
     if (error instanceof K6SpawnError) {
       process.stderr.write(`${error.message}\n`);

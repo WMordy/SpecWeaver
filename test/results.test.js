@@ -27,6 +27,7 @@ import {
   outcomeForK6ExitCode,
   redactSecrets,
   resolveResultsPath,
+  resolveRunExitCode,
   writeResultsFile,
 } from "../dist/results.js";
 import { EXIT_PREFLIGHT_FAILURE } from "../dist/run.js";
@@ -94,6 +95,20 @@ function sampleNdjson() {
   ].join("\n") + "\n";
 }
 
+/** The same capture with every recorded check passing (no POST 500). */
+function cleanNdjson() {
+  return [
+    httpReq("GET", PETS_URL, 200),
+    httpReq("GET", PETS_URL, 200),
+    httpReq("POST", PETS_URL, 201),
+    duration(10.5),
+    duration(20.5),
+    iteration(),
+    check(1, "status is 200"),
+    check(1, "status is 200/201"),
+  ].join("\n") + "\n";
+}
+
 const OPERATIONS = [
   {
     method: "GET",
@@ -128,6 +143,96 @@ test("outcomeForK6ExitCode maps zero to success and everything else to run_failu
   assert.equal(outcomeForK6ExitCode(1), "run_failure");
   assert.equal(outcomeForK6ExitCode(2), "run_failure");
   assert.equal(outcomeForK6ExitCode(null), "run_failure");
+});
+
+test("resolveRunExitCode covers the full gate matrix", () => {
+  const cases = [
+    // k6 success + failing checks present.
+    {
+      k6ExitCode: 0,
+      checks: { pass: 3, fail: 1 },
+      failOnCheckFailure: true,
+      expected: EXIT_K6_RUN_FAILURE,
+    },
+    {
+      k6ExitCode: 0,
+      checks: { pass: 3, fail: 1 },
+      failOnCheckFailure: false,
+      expected: EXIT_SUCCESS,
+    },
+    // k6 success + no failing checks.
+    {
+      k6ExitCode: 0,
+      checks: { pass: 4, fail: 0 },
+      failOnCheckFailure: true,
+      expected: EXIT_SUCCESS,
+    },
+    {
+      k6ExitCode: 0,
+      checks: { pass: 4, fail: 0 },
+      failOnCheckFailure: false,
+      expected: EXIT_SUCCESS,
+    },
+    // k6 success + zero checks executed never trips the gate.
+    {
+      k6ExitCode: 0,
+      checks: { pass: 0, fail: 0 },
+      failOnCheckFailure: true,
+      expected: EXIT_SUCCESS,
+    },
+    {
+      k6ExitCode: 0,
+      checks: { pass: 0, fail: 0 },
+      failOnCheckFailure: false,
+      expected: EXIT_SUCCESS,
+    },
+    // k6 failure always stays a k6 run failure, flag or not.
+    {
+      k6ExitCode: 2,
+      checks: { pass: 3, fail: 1 },
+      failOnCheckFailure: true,
+      expected: EXIT_K6_RUN_FAILURE,
+    },
+    {
+      k6ExitCode: 2,
+      checks: { pass: 3, fail: 1 },
+      failOnCheckFailure: false,
+      expected: EXIT_K6_RUN_FAILURE,
+    },
+    {
+      k6ExitCode: 2,
+      checks: { pass: 4, fail: 0 },
+      failOnCheckFailure: true,
+      expected: EXIT_K6_RUN_FAILURE,
+    },
+    {
+      k6ExitCode: 2,
+      checks: { pass: 4, fail: 0 },
+      failOnCheckFailure: false,
+      expected: EXIT_K6_RUN_FAILURE,
+    },
+    // A signal (null k6 exit) is likewise never masked or downgraded.
+    {
+      k6ExitCode: null,
+      checks: { pass: 0, fail: 0 },
+      failOnCheckFailure: true,
+      expected: EXIT_K6_RUN_FAILURE,
+    },
+    {
+      k6ExitCode: null,
+      checks: { pass: 4, fail: 0 },
+      failOnCheckFailure: false,
+      expected: EXIT_K6_RUN_FAILURE,
+    },
+  ];
+
+  for (const { expected, ...input } of cases) {
+    assert.equal(
+      resolveRunExitCode(input),
+      expected,
+      `resolveRunExitCode(${JSON.stringify(input)})`,
+    );
+  }
 });
 
 test("observeK6Results parses only the metrics the summary needs", () => {
@@ -460,6 +565,150 @@ test("built CLI writes the results file to --out and exits 0 on success", () => 
   assert.match(result.stdout, /SpecWeaver run summary/);
   assert.match(result.stdout, /Outcome: success/);
   assert.match(result.stdout, new RegExp(`Results file: .*results\\.json`));
+});
+
+test("built CLI --fail-on-check-failure exits 1 on a k6-success run with a failed check", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sw-res-"));
+  const configPath = writeConfig(dir);
+  const binDir = mkdtempSync(join(tmpdir(), "sw-bin-"));
+  const fixture = join(dir, "fixture.ndjson");
+  writeFileSync(fixture, sampleNdjson());
+  fakeK6(binDir, { fixture });
+  const outPath = join(dir, "results.json");
+
+  const result = runCli(configPath, {
+    binDir,
+    fixture,
+    args: ["--out", outPath, "--fail-on-check-failure"],
+  });
+
+  assert.equal(result.status, EXIT_K6_RUN_FAILURE, result.stderr);
+  // The results file is still written before the gate, reflecting k6's actual
+  // (successful) outcome and the recorded pass/fail counts.
+  assert.ok(existsSync(outPath), "results file should be written before gating");
+  const parsed = JSON.parse(readFileSync(outPath, "utf8"));
+  assert.equal(parsed.outcome, "success");
+  assert.equal(parsed.k6ExitCode, 0);
+  assert.deepEqual(parsed.checks["GET /pets"], { pass: 2, fail: 0 });
+  assert.deepEqual(parsed.checks["POST /pets"], { pass: 1, fail: 1 });
+  assert.deepEqual(parsed.summary.checks, { pass: 3, fail: 1, rate: 0.75 });
+  // The console summary is printed exactly once, before the gated exit.
+  assert.equal(
+    (result.stdout.match(/SpecWeaver run summary/g) ?? []).length,
+    1,
+    result.stdout,
+  );
+  assert.match(result.stdout, /Checks total: 3 passed, 1 failed/);
+  // One human-readable stderr message names the flag and the failing count.
+  assert.match(result.stderr, /--fail-on-check-failure/);
+  assert.match(result.stderr, /1 failing check\b/);
+  assert.equal((result.stderr.match(/--fail-on-check-failure/g) ?? []).length, 1);
+});
+
+test("built CLI without the flag keeps exit 0 and the same results for a failing fixture", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sw-res-"));
+  const configPath = writeConfig(dir);
+  const binDir = mkdtempSync(join(tmpdir(), "sw-bin-"));
+  const fixture = join(dir, "fixture.ndjson");
+  writeFileSync(fixture, sampleNdjson());
+  fakeK6(binDir, { fixture });
+  const gatedOut = join(dir, "gated.json");
+  const plainOut = join(dir, "plain.json");
+
+  const gated = runCli(configPath, {
+    binDir,
+    fixture,
+    args: ["--out", gatedOut, "--fail-on-check-failure"],
+  });
+  const plain = runCli(configPath, {
+    binDir,
+    fixture,
+    args: ["--out", plainOut],
+  });
+
+  assert.equal(gated.status, EXIT_K6_RUN_FAILURE, gated.stderr);
+  assert.equal(plain.status, EXIT_SUCCESS, plain.stderr);
+  assert.doesNotMatch(plain.stderr, /--fail-on-check-failure/);
+
+  // The flag changes only the exit code, not the results contents.
+  const gatedJson = JSON.parse(readFileSync(gatedOut, "utf8"));
+  const plainJson = JSON.parse(readFileSync(plainOut, "utf8"));
+  for (const key of [
+    "tool",
+    "version",
+    "config",
+    "k6ExitCode",
+    "outcome",
+    "checks",
+    "summary",
+  ]) {
+    assert.deepEqual(gatedJson[key], plainJson[key], `results key "${key}"`);
+  }
+});
+
+test("built CLI --fail-on-check-failure exits 0 when every recorded check passed", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sw-res-"));
+  const configPath = writeConfig(dir);
+  const binDir = mkdtempSync(join(tmpdir(), "sw-bin-"));
+  const fixture = join(dir, "fixture.ndjson");
+  writeFileSync(fixture, cleanNdjson());
+  fakeK6(binDir, { fixture });
+  const outPath = join(dir, "results.json");
+
+  const result = runCli(configPath, {
+    binDir,
+    fixture,
+    args: ["--out", outPath, "--fail-on-check-failure"],
+  });
+
+  assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+  assert.doesNotMatch(result.stderr, /--fail-on-check-failure/);
+  const parsed = JSON.parse(readFileSync(outPath, "utf8"));
+  assert.deepEqual(parsed.summary.checks, { pass: 3, fail: 0, rate: 1 });
+});
+
+test("built CLI --fail-on-check-failure exits 0 when zero checks were recorded", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sw-res-"));
+  const configPath = writeConfig(dir);
+  const binDir = mkdtempSync(join(tmpdir(), "sw-bin-"));
+  const fixture = join(dir, "fixture.ndjson");
+  writeFileSync(fixture, "");
+  fakeK6(binDir, { fixture });
+  const outPath = join(dir, "results.json");
+
+  const result = runCli(configPath, {
+    binDir,
+    fixture,
+    args: ["--out", outPath, "--fail-on-check-failure"],
+  });
+
+  assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+  assert.doesNotMatch(result.stderr, /--fail-on-check-failure/);
+  const parsed = JSON.parse(readFileSync(outPath, "utf8"));
+  assert.deepEqual(parsed.summary.checks, { pass: 0, fail: 0, rate: 1 });
+});
+
+test("built CLI --fail-on-check-failure never masks a genuine k6 run failure", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sw-res-"));
+  const configPath = writeConfig(dir);
+  const binDir = mkdtempSync(join(tmpdir(), "sw-bin-"));
+  const fixture = join(dir, "fixture.ndjson");
+  writeFileSync(fixture, sampleNdjson());
+  fakeK6(binDir, { fixture, code: 2 });
+  const outPath = join(dir, "results.json");
+
+  const result = runCli(configPath, {
+    binDir,
+    fixture,
+    args: ["--out", outPath, "--fail-on-check-failure"],
+  });
+
+  assert.equal(result.status, EXIT_K6_RUN_FAILURE, result.stderr);
+  assert.match(result.stderr, /k6 run failed \(exit code 2\)/);
+  assert.doesNotMatch(result.stderr, /--fail-on-check-failure/);
+  const parsed = JSON.parse(readFileSync(outPath, "utf8"));
+  assert.equal(parsed.outcome, "run_failure");
+  assert.equal(parsed.k6ExitCode, 2);
 });
 
 test("built CLI uses the config `output` field when --out is absent", () => {

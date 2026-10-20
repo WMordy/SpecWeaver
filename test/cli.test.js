@@ -62,9 +62,19 @@ function writeFakeK6(dir, code = 0) {
 test("built CLI --help exits 0 and lists the core flags", () => {
   const result = runCli(["--help"]);
   assert.equal(result.status, 0);
-  for (const flag of ["--config", "--vus", "--duration", "--out"]) {
+  for (const flag of [
+    "--config",
+    "--vus",
+    "--duration",
+    "--out",
+    "--fail-on-check-failure",
+  ]) {
     assert.ok(result.stdout.includes(flag), `usage should list ${flag}`);
   }
+  assert.match(
+    result.stdout,
+    /--fail-on-check-failure[\s\S]*Exit non-zero when any recorded check fails/,
+  );
 });
 
 test("built CLI --version exits 0 and prints the package version", () => {
@@ -101,9 +111,30 @@ test("parseArgs produces a structured options object", () => {
     vus: 10,
     duration: "1m30s",
     out: "results.json",
+    failOnCheckFailure: false,
     help: false,
     version: false,
   });
+});
+
+test("parseArgs recognizes --fail-on-check-failure as a valueless boolean flag", () => {
+  assert.equal(
+    parseArgs(["--config", "specweaver.yaml"]).failOnCheckFailure,
+    false,
+  );
+  const options = parseArgs(["--config", "specweaver.yaml", "--fail-on-check-failure"]);
+  assert.equal(options.failOnCheckFailure, true);
+  assert.equal(options.config, "specweaver.yaml");
+  // It takes no value: a following token is an ordinary argument, not its value.
+  assert.throws(
+    () => parseArgs(["--fail-on-check-failure", "true"]),
+    /Unexpected argument: true/,
+  );
+  // No `=true|false` form: absence is how the gate is disabled.
+  assert.throws(
+    () => parseArgs(["--fail-on-check-failure=true"]),
+    /Unknown flag: --fail-on-check-failure=true/,
+  );
 });
 
 test("parseArgs rejects a non-positive-integer --vus", () => {

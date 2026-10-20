@@ -326,6 +326,16 @@ test("unknown fields are rejected", () => {
   );
 });
 
+test("failOnCheckFailure is CLI-only and rejected as an unknown config field", () => {
+  assert.throws(
+    () =>
+      parseConfig(
+        "operations:\n  - method: GET\n    path: /pets\nfailOnCheckFailure: true\n",
+      ),
+    /unknown field `failOnCheckFailure`/,
+  );
+});
+
 test("auth ${ENV_VAR} references are resolved from the process environment", () => {
   const previous = process.env.SPECWEAVER_TEST_TOKEN;
   process.env.SPECWEAVER_TEST_TOKEN = "super-secret";

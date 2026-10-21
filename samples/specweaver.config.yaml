@@ -9,14 +9,19 @@
 
 # OpenAPI source(s) to load. Local file paths only (URLs are not fetched).
 # Required to execute; string or list of strings.
-# Requests default to the spec's first `servers[].url`. Add an optional
-# `baseUrl:` (see the README) to point the generated tests at a different host
-# without editing the spec.
+# Requests default to the first string `servers[].url` across the specs. Add an
+# optional `baseUrl:` (see the README) to point the generated tests at a
+# different host without editing the spec. Without a `baseUrl`, that fallback
+# must be an absolute http(s) URL or the run exits 2 before k6.
 specs:
   - samples/petstore.openapi.json
 
-# Opt-in operations. REQUIRED, non-empty. Each entry is exactly
-# `{ method, path }`. Only the operations listed here are ever tested.
+# Operations to test. REQUIRED: either a non-empty list of `{ method, path }`
+# entries or the exact literal `all`. The explicit list below demonstrates the
+# opt-in form and the auth/payload overrides. For the zero-override alternative
+# (`operations: all` with no auth, payloads, or baseUrl), see
+# samples/specweaver.zero-override.yaml and the README's "Zero-override run"
+# section. With `all`, every operation catalogued from every spec is tested.
 operations:
   - method: GET
     path: /pets

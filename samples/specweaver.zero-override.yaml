@@ -1,0 +1,19 @@
+# SpecWeaver zero-override sample config.
+#
+# Reference: from the repository root run
+#   specweaver --config samples/specweaver.zero-override.yaml
+# Relative `specs` paths are resolved against the current working directory,
+# so run the example from the repo root (where `samples/` lives).
+#
+# This is the minimal zero-override run: just a spec and `operations: all`.
+# No `auth`, `payloads`, or `baseUrl` are configured. `all` selects every
+# catalogued operation, and SpecWeaver derives request payloads and the request
+# base URL from the OpenAPI document. Auth is not derived: with no `auth`
+# configured, no auth headers are sent. The petstore spec's absolute `servers[].url`
+# (`http://localhost:8080`) supplies the base URL, so this config runs without
+# a `baseUrl` here. See README.md's "Zero-override run" section.
+specs:
+  - samples/petstore.openapi.json
+
+# Select every operation catalogued from every configured spec.
+operations: all

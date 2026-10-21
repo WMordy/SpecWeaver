@@ -5,15 +5,15 @@ priorities change; the Kanban board remains the source of truth for ticket statu
 
 - **Project:** SpecWeaver (`SPEC`) — `01M57WNZ2HM1QNBMD684YFXK7D`
 - **Audit of record:** SPEC-12 (closed) — `01M5CJ3JWM0S79R1GNVEEVJ5GX`
-- **Snapshot:** 2026-10-20
+- **Snapshot:** 2026-10-21
 
 ## Where we are
 
-SPEC-1 through SPEC-21 are `done` at P1 close. As of this refresh SPEC-17,
-SPEC-18, SPEC-19, SPEC-20, and SPEC-21 (this ticket) are all `done`, closing P1.
+SPEC-1 through SPEC-25 are `done` at the P2 zero-override milestone; SPEC-26
+(this docs/sample/ROADMAP refresh) is `in_progress` for review.
 
-P0 is committed on `master` (the working tree was clean at P1 open). The four P0
-commits are present in history, followed by the P0 roadmap commit:
+P0 (correctness and trust) and P1 (proof it works) are both closed and
+committed on `master`. The P0 commits are:
 
 - SPEC-13 `96363cf` — Apply YAML payload overrides to generated requests
 - SPEC-14 `1c30e7b` — Fail loudly when a run would execute no operations
@@ -36,12 +36,31 @@ P1 (SPEC-17…21) proved the project works end to end: GitHub Actions CI builds
 and tests every push/PR (SPEC-17), the k6 e2e is mandatory in CI rather than
 skipped (SPEC-18), `--fail-on-check-failure` provides opt-in check gating
 (SPEC-19), and the README documents the flag and exit-code behavior (SPEC-20).
-SPEC-21 is this verified roadmap refresh.
+SPEC-21 closed P1 with a verified roadmap refresh.
 
-Verification at P1 close: `npm run build` clean (`tsc` exits 0); `npm test`
-passes **240/240** tests with **0 failed and 0 skipped**, including the k6
-end-to-end test (k6 v2.3.0 present on this machine; the e2e executed, it was not
-skipped). That total is 16 tests above P0's 224, added by SPEC-18 and SPEC-19.
+P2's first increment — the **zero-override run** — has shipped as SPEC-22…25.
+A config can now supply just `specs` and `operations: all`; the tool selects the
+whole catalog and derives payloads and the request base URL from the OpenAPI
+document. Auth is **not** derived: it stays explicit and global, and a declared
+`security` requirement without configured auth only produces a warning (there is
+no `securitySchemes` mapping). SPEC-22 widened the config schema, SPEC-23
+expands `all` in deterministic order, SPEC-24 fails loudly on an unusable
+fallback base URL, and SPEC-25 warns on coverage gaps without failing. SPEC-26
+documents the shipped behavior and refreshes this roadmap.
+
+P2 commits on `master`:
+
+- SPEC-22 `51cf606` — Accept `operations: all` in the config schema
+- SPEC-23 `59f2724` — Select the whole catalog for `operations: all`
+- SPEC-24 `b2e25af` — Fail on an unusable base URL in zero-override runs
+- SPEC-25 `94d88ab` — Warn on zero-override coverage gaps
+
+Verification at this refresh (2026-10-21): `npm run build` clean (`tsc` exits 0);
+`npm test` passes **298/298** tests with **0 failed and 0 skipped**, including
+the k6 end-to-end test. That total is 58 tests above P1 close's 240. The
+zero-override sample was run from the repository root with the k6 PATH-stub
+pattern from `test/cli.test.js`: it exited `0`, selected all 3 petstore
+operations, and wrote a results file.
 
 ## Work order (do not reorder without updating this file)
 
@@ -79,7 +98,8 @@ Dependencies (resolved):
 
 #### SPEC-14 — fail loudly on no-run
 
-- `specs` becomes required whenever `operations` is non-empty (a deliberate
+- `specs` becomes required to execute: whether `operations` is an explicit
+  non-empty list or `all`, there must be a catalog to select from (a deliberate
   reversal of SPEC-2's "optional" decision; document it).
 - Missing `specs` → exit `2`, actionable message, no results file.
 - Every configured operation unmatched → exit `2`, list each unmatched
@@ -141,16 +161,74 @@ is the opt-in, CLI-only `--fail-on-check-failure` flag (SPEC-19), documented for
 users in the README (SPEC-20). There is no `results.json`-based external gate in
 v1, and no product-owner decision remains open for P1.
 
-### P2 — integration convenience (next)
+### P2 — integration convenience (in progress)
 
-1. **Operation selection:** support `operationId`, `tags`, or an `all` selector
-   plus tolerant method/path matching, so teams stop hand-enumerating every
-   operation.
-2. **Payload contract:** define precedence `payloads` → example/default →
-   faker before adding automatic schema-driven payload resolution. SPEC-13
-   defines the merge point; do not build on top of it until it ships.
-3. **Broader body/auth support:** non-JSON bodies (multipart, form-urlencoded,
-   XML), cookie params, per-operation auth. These are new features, not P0.
+The zero-override increment shipped; broader P2 work remains deferred.
+
+| Order | Key | Ticket ID | Priority | Status | Title |
+|---|---|---|---|---|---|
+| 1 | SPEC-22 | `01M5CX3NZCE8EHCPB38ZZ467PP` | high | done | Accept `operations: all` in the config schema |
+| 2 | SPEC-23 | `01M5CX3PR9PBAFT1V6XC2BY20Z` | high | done | Select the whole catalog for `operations: all` |
+| 3 | SPEC-24 | `01M5CX3QAJH27Y9ZYNT80MHYKQ` | high | done | Fail on an unusable base URL in zero-override runs |
+| 4 | SPEC-25 | `01M5CX3QZH098D14DBD95GC9MK` | medium | done | Warn on zero-override coverage gaps |
+| 5 | SPEC-26 | `01M5CX3RVF813NP33HYPSD30XX` | low | in_progress | Document zero-override mode and refresh the ROADMAP |
+
+Statuses are the board state at this refresh (2026-10-21). SPEC-22…25 are
+`done`; SPEC-26 is the docs/sample/roadmap ticket awaiting review.
+
+Dependencies (resolved):
+
+- SPEC-23 consumes SPEC-22's `OperationsSelector` union; expansion lives in the
+  CLI selection path.
+- SPEC-24 and SPEC-25 wire into the post-selection, pre-preflight CLI path, so
+  they depend on SPEC-23 returning concrete operations.
+- SPEC-26 is docs-truth and must be last, written against the behavior shipped
+  by SPEC-22…25.
+
+#### P2 outcome
+
+1. **Operation selection — partially delivered (`all` only).** `operations: all`
+   selects every catalogued operation across every configured spec in
+   deterministic order. `operationId` selectors, `tags` selectors, `*`/wildcard
+   shorthands, per-operation include/exclude, and tolerant method/path matching
+   are **deferred**, not shipped. The only accepted selector is the exact,
+   case-sensitive literal `all`.
+2. **Payload contract — delivered and documented.** Precedence is
+   `payloads` override (whole-body replacement) → explicit example/examples →
+   schema `default` → faker by `type`/`format`; required and optional fields are
+   always generated. This is now the README's documented behavior, not a plan.
+3. **Broader body/auth support — deferred (warn-only).** Non-JSON bodies
+   (multipart, form-urlencoded, XML), cookie parameters, security-scheme-derived
+   auth, and per-operation auth are not implemented. Non-JSON required bodies,
+   cookie parameters, and security without configured auth are surfaced by
+   SPEC-25 warnings; security-scheme-derived and per-operation auth remain
+   unimplemented without a dedicated warning.
+
+#### P2 limitations
+
+- **Non-JSON request bodies** are not generated. A required non-JSON body is
+  sent without a body and produces a `warning:`; optional non-JSON bodies are
+  silent.
+- **Cookie parameters** (`in: cookie`) are not generated or sent; each operation
+  with one warns once.
+- **Auth gaps are warn-only.** Auth is a single global static token/headers
+  value. An operation with non-empty `security` and no configured auth runs
+  without authentication and warns; there is no `securitySchemes` mapping and no
+  per-operation auth.
+- **Base URL uses only the first string fallback entry.** Without an explicit
+  `baseUrl`, resolution takes the first string `servers[].url` across the specs
+  in `specs` order (server-variable defaults substituted). A later absolute
+  entry is not a fallback, so a relative first entry fails even when a later
+  entry would be usable.
+- **Explicit `baseUrl` is trusted verbatim.** It must be a non-empty string
+  (config validation rejects an empty or non-string value); otherwise it is used
+  as-is and bypasses the server-URL usability gate. Trailing slashes are
+  stripped when request URLs are composed.
+- **`specs` is local-file-only.** Remote `http(s)://` documents are never
+  fetched.
+- **OpenAPI 3.1 `webhooks` are not catalogued**, and neither are
+  components-only documents. Such specs load but contribute zero operations;
+  under `all` they can lead to the zero-catalog exit `2`.
 
 ## Explicit non-goals for this roadmap
 
@@ -189,3 +267,8 @@ unless the product owner reopens them. Do not create tickets for them here.
   refresh approved. P0 is recorded as committed (`96363cf`, `1c30e7b`,
   `c3c139b`, `39c9c3e`, roadmap `c92c2d6`). `npm run build` clean;
   `npm test` 240/240 passing, 0 skipped, including the k6 e2e. P2 is next.
+- 2026-10-21: P2 zero-override increment complete. SPEC-22…25 approved and
+  `done` (`51cf606`, `59f2724`, `b2e25af`, `94d88ab`); SPEC-26 docs, sample,
+  and roadmap refresh added. `npm run build` clean; `npm test` 298/298 passing,
+  0 skipped, including the k6 e2e; the zero-override sample exits `0` against
+  the k6 PATH stub. Selectors beyond `all` remain deferred.

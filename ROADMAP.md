@@ -5,12 +5,12 @@ priorities change; the Kanban board remains the source of truth for ticket statu
 
 - **Project:** SpecWeaver (`SPEC`) — `01M57WNZ2HM1QNBMD684YFXK7D`
 - **Audit of record:** SPEC-12 (closed) — `01M5CJ3JWM0S79R1GNVEEVJ5GX`
-- **Snapshot:** 2026-10-21
+- **Snapshot:** 2026-10-22
 
 ## Where we are
 
-SPEC-1 through SPEC-25 are `done` at the P2 zero-override milestone; SPEC-26
-(this docs/sample/ROADMAP refresh) is `in_progress` for review.
+SPEC-1 through SPEC-26 are `done`; the P2 zero-override milestone is complete
+and committed, and no ticket is currently `in_progress`.
 
 P0 (correctness and trust) and P1 (proof it works) are both closed and
 committed on `master`. The P0 commits are:
@@ -54,10 +54,12 @@ P2 commits on `master`:
 - SPEC-23 `59f2724` — Select the whole catalog for `operations: all`
 - SPEC-24 `b2e25af` — Fail on an unusable base URL in zero-override runs
 - SPEC-25 `94d88ab` — Warn on zero-override coverage gaps
+- SPEC-26 `0e0962e` — Document zero-override mode and refresh the roadmap
 
-Verification at this refresh (2026-10-21): `npm run build` clean (`tsc` exits 0);
-`npm test` passes **298/298** tests with **0 failed and 0 skipped**, including
-the k6 end-to-end test. That total is 58 tests above P1 close's 240. The
+Verification at the P2 close (2026-10-21, CI re-run 2026-10-22): `npm run build`
+clean (`tsc` exits 0); `npm test` passes **298/298** tests with **0 failed and
+0 skipped**, including the k6 end-to-end test. That total is 58 tests above P1
+close's 240. CI run `39691033919` is green on SPEC-26 commit `0e0962e`. The
 zero-override sample was run from the repository root with the k6 PATH-stub
 pattern from `test/cli.test.js`: it exited `0`, selected all 3 petstore
 operations, and wrote a results file.
@@ -161,9 +163,10 @@ is the opt-in, CLI-only `--fail-on-check-failure` flag (SPEC-19), documented for
 users in the README (SPEC-20). There is no `results.json`-based external gate in
 v1, and no product-owner decision remains open for P1.
 
-### P2 — integration convenience (in progress)
+### P2 — integration convenience (zero-override increment complete; remainder deferred)
 
-The zero-override increment shipped; broader P2 work remains deferred.
+The zero-override increment shipped and is committed; broader P2 work remains
+deferred and has no active ticket.
 
 | Order | Key | Ticket ID | Priority | Status | Title |
 |---|---|---|---|---|---|
@@ -171,10 +174,10 @@ The zero-override increment shipped; broader P2 work remains deferred.
 | 2 | SPEC-23 | `01M5CX3PR9PBAFT1V6XC2BY20Z` | high | done | Select the whole catalog for `operations: all` |
 | 3 | SPEC-24 | `01M5CX3QAJH27Y9ZYNT80MHYKQ` | high | done | Fail on an unusable base URL in zero-override runs |
 | 4 | SPEC-25 | `01M5CX3QZH098D14DBD95GC9MK` | medium | done | Warn on zero-override coverage gaps |
-| 5 | SPEC-26 | `01M5CX3RVF813NP33HYPSD30XX` | low | in_progress | Document zero-override mode and refresh the ROADMAP |
+| 5 | SPEC-26 | `01M5CX3RVF813NP33HYPSD30XX` | low | done | Document zero-override mode and refresh the ROADMAP |
 
-Statuses are the board state at this refresh (2026-10-21). SPEC-22…25 are
-`done`; SPEC-26 is the docs/sample/roadmap ticket awaiting review.
+Statuses are the board state at this refresh (2026-10-22). All of SPEC-22…26
+are `done`; no active P2 ticket remains.
 
 Dependencies (resolved):
 
@@ -221,7 +224,8 @@ Dependencies (resolved):
   entry is not a fallback, so a relative first entry fails even when a later
   entry would be usable.
 - **Explicit `baseUrl` is trusted verbatim.** It must be a non-empty string
-  (config validation rejects an empty or non-string value); otherwise it is used
+  (config validation rejects an empty, whitespace-only, or non-string value);
+  otherwise it is used
   as-is and bypasses the server-URL usability gate. Trailing slashes are
   stripped when request URLs are composed.
 - **`specs` is local-file-only.** Remote `http(s)://` documents are never
@@ -272,3 +276,7 @@ unless the product owner reopens them. Do not create tickets for them here.
   and roadmap refresh added. `npm run build` clean; `npm test` 298/298 passing,
   0 skipped, including the k6 e2e; the zero-override sample exits `0` against
   the k6 PATH stub. Selectors beyond `all` remain deferred.
+- 2026-10-22: SPEC-26 approved and `done` (`0e0962e`); P2 zero-override
+  milestone closed with no active ticket. CI run `39691033919` green on
+  `0e0962e`. Remaining P2 items (selector breadth, non-JSON bodies, cookies,
+  auth derivation/per-operation auth) stay deferred.

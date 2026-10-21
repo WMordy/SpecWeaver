@@ -13,8 +13,8 @@
  * intentionally not supported. `specs` entries are local filesystem paths only:
  * remote `http(s)://` URLs are not fetched.
  *
- * `specs` is required to execute: because `operations` is required and
- * non-empty (SPEC-2), a config that omits `specs` can never run anything. This
+ * `specs` is required to execute: because `operations` is always required
+ * (SPEC-2), a config that omits `specs` can never run anything. This
  * deliberately reverses SPEC-2's "specs is optional" decision (SPEC-14). The
  * parser keeps `specs` optional so the CLI can emit its dedicated no-run error
  * (and SPEC-13 payload warnings) instead of a generic schema error; the CLI
@@ -25,9 +25,10 @@
  * ```yaml
  * specs:                      # REQUIRED to execute, local path(s) or list (no URLs)
  *   - ./openapi.yaml
- * operations:                 # REQUIRED, non-empty list of { method, path }
+ * operations:                 # REQUIRED: non-empty list of { method, path }, or the literal `all`
  *   - method: GET
  *     path: /pets
+ * # operations: all          # selects every operation in the loaded catalog (expansion owned by SPEC-23)
  * baseUrl: https://api.example.com  # OPTIONAL, request base URL (overrides the spec's first servers[].url; consumed by SPEC-6)
  * auth:                       # OPTIONAL, static token/headers (env-referenceable)
  *   token: "${API_TOKEN}"
@@ -54,6 +55,16 @@ export interface OperationConfig {
   /** OpenAPI path, e.g. `/pets`. */
   path: string;
 }
+
+/**
+ * The `operations` selector from the config.
+ *
+ * Either an explicit non-empty list of {@link OperationConfig} entries, or the
+ * exact literal `"all"`. `"all"` selects every operation in the loaded spec
+ * catalog; expanding it into concrete operations at run time is owned by
+ * SPEC-23, so the config layer only validates and exposes the selector here.
+ */
+export type OperationsSelector = OperationConfig[] | "all";
 
 /** The load profile applied when the operations run. */
 export interface LoadConfig {
@@ -111,8 +122,12 @@ export interface Config {
    * SPEC-13 payload warnings.
    */
   specs?: string[];
-  /** Opt-in operations. Never empty for a validated config. */
-  operations: OperationConfig[];
+  /**
+   * Opt-in operations: either an explicit non-empty list or the literal `"all"`.
+   * The list form is never empty for a validated config. `"all"` selects every
+   * operation in the loaded catalog (expansion owned by SPEC-23).
+   */
+  operations: OperationsSelector;
   /**
    * Optional request base URL. When present it overrides the spec's first
    * `servers[].url` as the base for generated requests (consumed by SPEC-6);
@@ -244,13 +259,22 @@ interface PartialLoad {
   duration?: string;
 }
 
-function validateOperations(value: unknown, errors: string[]): OperationConfig[] {
+function validateOperations(
+  value: unknown,
+  errors: string[],
+): OperationsSelector {
   if (value === undefined || value === null) {
     errors.push("`operations` is required and must list at least one `{ method, path }` entry");
     return [];
   }
+  // The selector is exact and case-sensitive: only the YAML scalar `all`.
+  if (value === "all") {
+    return "all";
+  }
   if (!Array.isArray(value)) {
-    errors.push("`operations` must be a list of `{ method, path }` entries");
+    errors.push(
+      "`operations` must be a non-empty list of `{ method, path }` entries or the literal `all`",
+    );
     return [];
   }
   if (value.length === 0) {

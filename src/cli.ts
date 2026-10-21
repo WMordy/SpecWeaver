@@ -150,8 +150,12 @@ async function run(options: CliOptions): Promise<number> {
   writeWarnings(result.warnings);
 
   const specCount = config.specs?.length ?? 0;
+  const operationsSummary =
+    config.operations === "all"
+      ? "all catalog operations"
+      : `${config.operations.length} operation(s)`;
   process.stdout.write(
-    `Loaded config: ${config.operations.length} operation(s), ${specCount} spec source(s).\n`,
+    `Loaded config: ${operationsSummary}, ${specCount} spec source(s).\n`,
   );
   process.stdout.write(
     `Load profile: ${config.load.vus} virtual user(s) for ${config.load.duration}.\n`,
@@ -197,6 +201,16 @@ async function run(options: CliOptions): Promise<number> {
         "error: `specs` is required to execute operations, but no spec source is configured.",
         "Add at least one OpenAPI file under `specs` in the config; operations cannot be matched or run without a loaded spec.",
       ].join("\n") + "\n",
+    );
+    return EXIT_SPECWEAVER_ERROR;
+  }
+
+  // SPEC-22 only models `operations: all` in the config schema; expanding it
+  // into the loaded catalog is SPEC-23. Until that lands, reject the selector at
+  // the CLI boundary rather than coercing it into an empty explicit list.
+  if (config.operations === "all") {
+    process.stderr.write(
+      "error: `operations: all` is not supported yet; list operations explicitly in the config.\n",
     );
     return EXIT_SPECWEAVER_ERROR;
   }

@@ -232,6 +232,89 @@ test("a duplicate operation (same method + path) fails validation", () => {
   assert.throws(() => parseConfig(yaml), /duplicate operation `GET \/pets`/);
 });
 
+test("operations accepts the exact literal `all`", () => {
+  const { config } = parseConfig("specs: ./openapi.yaml\noperations: all\n");
+  assert.equal(config.operations, "all");
+  assert.deepEqual(config.specs, ["./openapi.yaml"]);
+});
+
+test("`operations: all` keeps the other config fields intact", () => {
+  const { config } = parseConfig(`specs:
+  - ./openapi.yaml
+operations: all
+auth:
+  token: token-123
+payloads:
+  - method: POST
+    path: /pets
+    body:
+      name: Rex
+load:
+  vus: 3
+  duration: 10s
+`);
+  assert.equal(config.operations, "all");
+  assert.deepEqual(config.specs, ["./openapi.yaml"]);
+  assert.deepEqual(config.auth, { token: "token-123" });
+  assert.deepEqual(config.payloads, [
+    { method: "POST", path: "/pets", body: { name: "Rex" } },
+  ]);
+  assert.deepEqual(config.load, { vus: 3, duration: "10s" });
+});
+
+test("the `all` literal is exact and case-sensitive", () => {
+  const acceptedForms =
+    /`operations` must be a non-empty list of `\{ method, path \}` entries or the literal `all`/;
+  for (const value of ["ALL", "All", '" all"', "all!", "operations"]) {
+    assert.throws(
+      () => parseConfig(`operations: ${value}\n`),
+      (error) => {
+        assert.ok(error instanceof ConfigError);
+        assert.ok(error.errors.length >= 1);
+        assert.match(error.message, acceptedForms);
+        return true;
+      },
+    );
+  }
+});
+
+test("non-list, non-`all` operations selectors are rejected", () => {
+  const acceptedForms =
+    /`operations` must be a non-empty list of `\{ method, path \}` entries or the literal `all`/;
+  for (const value of ['"*"', "true", "{ all: true }", "42"]) {
+    assert.throws(
+      () => parseConfig(`operations: ${value}\n`),
+      acceptedForms,
+    );
+  }
+});
+
+test("a list containing `all` is not an accepted selector", () => {
+  assert.throws(
+    () => parseConfig("operations: [all]\n"),
+    /operations\[0\].*must be a mapping/,
+  );
+});
+
+test("an invalid operations selector is aggregated with other schema errors", () => {
+  const yaml = `operations: ALL
+specs: ""
+load:
+  vus: 0
+`;
+  assert.throws(
+    () => parseConfig(yaml),
+    (error) => {
+      assert.ok(error instanceof ConfigError);
+      assert.ok(error.errors.length >= 3, "expected aggregated errors");
+      assert.match(error.message, /`operations` must be a non-empty list .* or the literal `all`/);
+      assert.match(error.message, /`specs` must be a non-empty string/);
+      assert.match(error.message, /`load\.vus` must be a positive integer/);
+      return true;
+    },
+  );
+});
+
 test("invalid YAML produces a human-readable ConfigError", () => {
   assert.throws(
     () => parseConfig("operations: [\n", {}, "specweaver.yaml"),

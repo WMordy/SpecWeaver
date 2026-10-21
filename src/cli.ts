@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { CliUsageError, USAGE, parseArgs, type CliOptions } from "./args.js";
-import { injectAuth } from "./auth.js";
+import { injectAuth, resolveAuthHeaders } from "./auth.js";
+import { buildCoverageWarnings } from "./coverage.js";
 import {
   ConfigError,
   loadConfig,
@@ -391,6 +392,14 @@ async function run(options: CliOptions): Promise<number> {
       `${WARNING_PREFIX} operation "${method} ${path}" is not present in the loaded spec(s); skipping.\n`,
     );
   }
+
+  // SPEC-25 coverage gaps: warn (never fail or skip) when a selected operation
+  // cannot be fully modelled. Emitted after selection — and after the unmatched
+  // warnings above — but before the SPEC-24 base-URL gate and the SPEC-7 k6
+  // preflight, so gaps are reported even when the run later aborts there. The
+  // classifier is selector-independent: it sees exactly the selected operations.
+  const coverageAuthHeaders = resolveAuthHeaders(config.auth).headers;
+  writeWarnings(buildCoverageWarnings(selected, coverageAuthHeaders));
 
   // SPEC-24 base-URL usability gate (A1-A5). Without an explicit `baseUrl`, the
   // request base URL is derived from the first `servers[].url`. A missing,

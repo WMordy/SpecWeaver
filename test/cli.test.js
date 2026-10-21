@@ -1031,6 +1031,147 @@ test("built CLI base-URL failure is deterministic across repeated runs", () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+// --- SPEC-25: coverage-gap warnings ---------------------------------------
+
+/** Paths exercising all three coverage gaps (body, cookie, security). */
+function coverageGapPaths() {
+  return {
+    "/pets": {
+      get: {
+        ...apiOperation(),
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "session", in: "cookie", schema: { type: "string" } },
+        ],
+      },
+      post: {
+        ...apiOperation(),
+        requestBody: {
+          required: true,
+          content: { "application/xml": { schema: { type: "object" } } },
+        },
+      },
+    },
+  };
+}
+
+/** Only the SPEC-25 warning lines, in stderr order. */
+function coverageWarningLines(stderr) {
+  return stderr
+    .split("\n")
+    .filter(
+      (line) =>
+        line.startsWith("warning: operation ") &&
+        /(requires a request body|declares cookie parameter|declares security)/.test(
+          line,
+        ),
+    );
+}
+
+test("built CLI warns about every coverage gap once and still runs", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writePathsSpec(dir, "openapi.json", coverageGapPaths());
+  const run = runSandboxed(
+    dir,
+    `specs:\n  - ${specPath}\noperations: all\n`,
+    { keepTemp: true },
+  );
+
+  assert.equal(run.result.status, EXIT_SUCCESS, run.result.stderr);
+  assert.equal(existsSync(run.k6Marker), true, "k6 should have been invoked");
+  assert.equal(existsSync(run.resultsPath), true, "results file should exist");
+
+  const lines = coverageWarningLines(run.result.stderr);
+  assert.equal(lines.length, 3, run.result.stderr);
+  assert.match(
+    lines[0],
+    /^warning: operation "GET \/pets" declares cookie parameter\(s\) "session"/,
+  );
+  assert.match(
+    lines[1],
+    /^warning: operation "GET \/pets" declares security but no auth is configured/,
+  );
+  assert.match(
+    lines[2],
+    /^warning: operation "POST \/pets" requires a request body but declares no JSON media type \(declared: "application\/xml"\)/,
+  );
+
+  // Non-fatal: the operations still ran and are recorded in the results JSON.
+  const results = JSON.parse(readFileSync(run.resultsPath, "utf8"));
+  assert.deepEqual(Object.keys(results.checks), ["GET /pets", "POST /pets"]);
+});
+
+test("coverage warnings are selector-independent and deterministic", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writePathsSpec(dir, "openapi.json", coverageGapPaths());
+
+  const allRun = runSandboxed(
+    dir,
+    `specs:\n  - ${specPath}\noperations: all\n`,
+  );
+  const explicitRun = runSandboxed(
+    dir,
+    `specs:\n  - ${specPath}\noperations:\n  - method: GET\n    path: /pets\n  - method: POST\n    path: /pets\n`,
+  );
+  const repeatedRun = runSandboxed(
+    dir,
+    `specs:\n  - ${specPath}\noperations: all\n`,
+  );
+
+  assert.equal(allRun.result.status, EXIT_SUCCESS, allRun.result.stderr);
+  assert.equal(explicitRun.result.status, EXIT_SUCCESS, explicitRun.result.stderr);
+  assert.equal(repeatedRun.result.status, EXIT_SUCCESS, repeatedRun.result.stderr);
+
+  // The same selected operations report the same gaps, and repeated runs are
+  // byte-identical on stderr.
+  assert.deepEqual(
+    coverageWarningLines(allRun.result.stderr),
+    coverageWarningLines(explicitRun.result.stderr),
+  );
+  assert.equal(allRun.result.stderr, repeatedRun.result.stderr);
+});
+
+test("a configured token, including an empty one, suppresses only the auth warning", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writePathsSpec(dir, "openapi.json", coverageGapPaths());
+  const run = runSandboxed(
+    dir,
+    `specs:\n  - ${specPath}\noperations: all\nauth:\n  token: ""\n`,
+  );
+
+  assert.equal(run.result.status, EXIT_SUCCESS, run.result.stderr);
+  const lines = coverageWarningLines(run.result.stderr);
+  assert.equal(lines.length, 2, run.result.stderr);
+  assert.match(lines[0], /declares cookie parameter/);
+  assert.match(lines[1], /requires a request body/);
+  assert.doesNotMatch(run.result.stderr, /declares security/);
+});
+
+test("coverage warnings are printed before the base-URL gate aborts the run", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  // No `servers` member: SPEC-24 rejects the run before k6, but SPEC-25 must
+  // still report the gaps in the selected operations first.
+  const specPath = join(dir, "no-servers.json");
+  writeFileSync(
+    specPath,
+    JSON.stringify({
+      openapi: "3.0.3",
+      info: { title: "no-servers", version: "1" },
+      paths: coverageGapPaths(),
+    }),
+  );
+  const run = runSandboxed(dir, `specs:\n  - ${specPath}\noperations: all\n`);
+
+  assert.equal(run.result.status, EXIT_SPECWEAVER_ERROR, run.result.stderr);
+  assert.match(run.result.stderr, /error: no request base URL was resolved/);
+  assert.equal(existsSync(run.k6Marker), false, "k6 must not be invoked");
+  const lines = coverageWarningLines(run.result.stderr);
+  assert.deepEqual(
+    lines.map((line) => line.match(/operation "([^"]+)"/)?.[1]),
+    ["GET /pets", "GET /pets", "POST /pets"],
+  );
+});
+
 test("built CLI with an invalid config exits non-zero and names the field", () => {
   const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
   const configPath = join(dir, "specweaver.yaml");

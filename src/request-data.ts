@@ -611,8 +611,15 @@ export function generateParameterValue(
   return generateFromSchema(parameter.schema, faker);
 }
 
-/** Pick the JSON media type of a request body, if any. */
-function jsonMediaType(content: JsonObject): JsonObject | undefined {
+/**
+ * Pick the JSON media type of a request body, if any.
+ *
+ * Exported so SPEC-25's coverage classifier applies exactly the same rule as
+ * generation: `application/json`, or any media type containing `json`
+ * (e.g. `application/problem+json`). A body without such a media type is one
+ * {@link generateRequestBody} cannot model.
+ */
+export function jsonMediaType(content: JsonObject): JsonObject | undefined {
   const direct = content["application/json"];
   if (isObject(direct)) {
     return direct;

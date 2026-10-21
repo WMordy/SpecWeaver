@@ -23,11 +23,15 @@ import {
   DEFAULT_EXPECTED_STATUS,
   GENERATED_FILE_MODE,
   JSON_CONTENT_TYPE,
+  REDACTED_BASE_URL_MARKER,
   SCRIPT_FILE_NAME,
   TEMP_DIRECTORY_PREFIX,
   buildRequestUrl,
+  classifyBaseUrl,
   emitScript,
+  redactBaseUrlForDiagnostics,
   resolveBaseUrl,
+  resolveFallbackBaseUrl,
   writeEmittedScript,
 } from "../dist/script/emit.js";
 
@@ -415,6 +419,285 @@ test("falls back to the spec's first servers[].url with variable defaults", () =
   });
   assert.equal(data.baseUrl, "https://api.example.com/api");
   assert.equal(data.operations[0].url, "https://api.example.com/api/pets");
+});
+
+// --- Base URL usability (SPEC-24) -----------------------------------------
+
+test("classifyBaseUrl rejects a missing fallback server URL", () => {
+  assert.equal(classifyBaseUrl(undefined), "missing");
+});
+
+test("classifyBaseUrl rejects an empty or whitespace-only server URL", () => {
+  assert.equal(classifyBaseUrl(""), "empty");
+  assert.equal(classifyBaseUrl("   "), "empty");
+});
+
+test("classifyBaseUrl rejects a URL with surrounding whitespace", () => {
+  assert.equal(
+    classifyBaseUrl(" https://api.example.com "),
+    "surrounding-whitespace",
+  );
+  assert.equal(
+    classifyBaseUrl("https://api.example.com\n"),
+    "surrounding-whitespace",
+  );
+});
+
+test("classifyBaseUrl rejects embedded whitespace and control characters", () => {
+  for (const value of [
+    "https://api.example.com\t/v1",
+    "https://api.example.com\n/v1",
+    "https://api.example.com\r/v1",
+    "https://api.example.com\f/v1",
+    "https://api.example.com\v/v1",
+    "https://api.example.com /v1",
+    "https://api.example.com\u0000/v1",
+  ]) {
+    assert.equal(classifyBaseUrl(value), "embedded-whitespace", value);
+  }
+});
+
+test("classifyBaseUrl rejects relative server URLs", () => {
+  assert.equal(classifyBaseUrl("/v1"), "relative");
+  assert.equal(classifyBaseUrl("api.example.com/v1"), "relative");
+  assert.equal(classifyBaseUrl("http://"), "relative");
+});
+
+test("classifyBaseUrl rejects absolute URLs that are not http(s)", () => {
+  assert.equal(classifyBaseUrl("ftp://example.com"), "unsupported-protocol");
+  assert.equal(classifyBaseUrl("file:///tmp/spec.json"), "unsupported-protocol");
+});
+
+test("classifyBaseUrl rejects unresolved server-variable placeholders", () => {
+  assert.equal(
+    classifyBaseUrl("https://{host}/api"),
+    "unresolved-variable",
+  );
+  assert.equal(
+    classifyBaseUrl("https://api.example.com/{version}"),
+    "unresolved-variable",
+  );
+});
+
+test("classifyBaseUrl rejects empty-name and malformed placeholders", () => {
+  assert.equal(
+    classifyBaseUrl("https://{}/api"),
+    "unresolved-variable",
+  );
+  assert.equal(
+    classifyBaseUrl("https://{host/api"),
+    "unresolved-variable",
+  );
+  assert.equal(
+    classifyBaseUrl("https://api.example.com/{version"),
+    "unresolved-variable",
+  );
+});
+
+test("redactBaseUrlForDiagnostics quotes every allowlisted shape verbatim", () => {
+  // Shape 1: the empty string.
+  assert.equal(redactBaseUrlForDiagnostics(""), "");
+
+  // Shape 2: root-relative paths.
+  for (const value of ["/", "/v1", "/api/v1/pets", "/a.b_c~d-e/"]) {
+    assert.equal(redactBaseUrlForDiagnostics(value), value, value);
+  }
+
+  // Shape 3: relative host/path.
+  for (const value of ["api.example.com", "api.example.com/v1", "localhost"]) {
+    assert.equal(redactBaseUrlForDiagnostics(value), value, value);
+  }
+
+  // Shape 4: absolute scheme://host/path with a structurally safe authority.
+  for (const value of [
+    "ftp://example.com",
+    "http://127.0.0.1:8080",
+    "http://[::1]:8080",
+    "ftp://example.com:8443",
+    "https://api.example.com/v1/",
+  ]) {
+    assert.equal(redactBaseUrlForDiagnostics(value), value, value);
+  }
+
+  // Shape 5: absolute URL with named {variable} placeholders.
+  for (const value of [
+    "https://{host}/api",
+    "http://{host}:{port}/v1",
+    "https://api.{domain}/v1/{version}",
+  ]) {
+    assert.equal(redactBaseUrlForDiagnostics(value), value, value);
+  }
+});
+
+test("redactBaseUrlForDiagnostics masks the whole value when userinfo is present", () => {
+  for (const value of [
+    "ftp://user:secret@example.com",
+    "https://user@example.com/v1",
+    "https://:secret@example.com",
+    "ftp://user:SUPERSECRET/part@example.com",
+    "ftp://user:SUPERSECRET part@example.com",
+    "//user:SUPERSECRET@example.com",
+  ]) {
+    assert.equal(
+      redactBaseUrlForDiagnostics(value),
+      REDACTED_BASE_URL_MARKER,
+      value,
+    );
+  }
+});
+
+test("redactBaseUrlForDiagnostics masks adversarial malformed userinfo", () => {
+  for (const value of [
+    "ftp://user:SEKRIT_P?x@example.com",
+    "ftp://user:SEKRIT_Q#x@example.com",
+    "ftp://user:SEKRIT/?x=y@example.com",
+    "user:SEKRIT_R@example.com",
+  ]) {
+    assert.equal(
+      redactBaseUrlForDiagnostics(value),
+      REDACTED_BASE_URL_MARKER,
+      value,
+    );
+  }
+});
+
+test("redactBaseUrlForDiagnostics masks sensitive assignments anywhere", () => {
+  for (const value of [
+    "api.example.com/v1?client_secret=SUPERSECRET",
+    "api.example.com/v1?X-Amz-Signature=SUPERSECRET",
+    "api.example.com/v1#access_token=SUPERSECRET",
+    "api.example.com/v1?api_key=SUPERSECRET&other=keep",
+    "http://example.com?token=abc&access_token=def&key=1&secret=2&password=3&signature=4&sig=5",
+    "http://example.com?a=keep#auth=abc&session=def&credential=ghi",
+    "api.example.com/v1?access_token=abc SEKRIT_SUFFIX",
+    "api.example.com/v1?access_token=abc\tSEKRIT_SUFFIX",
+  ]) {
+    assert.equal(
+      redactBaseUrlForDiagnostics(value),
+      REDACTED_BASE_URL_MARKER,
+      value,
+    );
+  }
+});
+
+test("redactBaseUrlForDiagnostics masks userinfo-like authorities without @", () => {
+  for (const value of ["ftp://user:SEKRIT", "//user:SEKRIT", "https://:x"]) {
+    assert.equal(
+      redactBaseUrlForDiagnostics(value),
+      REDACTED_BASE_URL_MARKER,
+      value,
+    );
+  }
+});
+
+test("redactBaseUrlForDiagnostics masks every value with a forbidden separator", () => {
+  for (const value of [
+    // The motivating bypasses: a space or newline before `=`.
+    "https://api.example.com/v1?access_token =SUPERSECRET",
+    "https://api.example.com/v1?access_token\n=SUPERSECRET",
+    // Bare userinfo shape.
+    "user:SEKRIT",
+    // Query-bearing relative host.
+    "api.example.com/v1?jwt=SUPERSECRET",
+    // Each forbidden character on its own.
+    "https://api.example.com/v1?a=1",
+    "https://api.example.com/v1#fragment",
+    "https://api.example.com/v1?x=1",
+    "https://example.com/#",
+    "https://example.com/a=b",
+    // Embedded whitespace and control characters.
+    "https://api.example.com\t/v1",
+    "https://api.example.com\n/v1",
+    "https://api.example.com\r/v1",
+    "https://api.example.com\f/v1",
+    "https://api.example.com\v/v1",
+    "https://api.example.com /v1",
+    "https://api.example.com\u0000/v1",
+    " https://api.example.com ",
+  ]) {
+    assert.equal(
+      redactBaseUrlForDiagnostics(value),
+      REDACTED_BASE_URL_MARKER,
+      value,
+    );
+  }
+});
+
+test("redactBaseUrlForDiagnostics masks malformed or empty brace placeholders", () => {
+  for (const value of [
+    "https://{}/api",
+    "https://{host/api",
+    "https://api.example.com/{version",
+    "https://api.example.com/version}",
+    "https://{host}{}/api",
+    "https://{1host}/api",
+    "https://{{host}}/api",
+    "https://{host}/api?x={y}",
+  ]) {
+    assert.equal(
+      redactBaseUrlForDiagnostics(value),
+      REDACTED_BASE_URL_MARKER,
+      value,
+    );
+  }
+});
+
+
+test("classifyBaseUrl accepts absolute http(s) URLs with a host", () => {
+  assert.equal(classifyBaseUrl("https://api.example.com/v1"), undefined);
+  assert.equal(classifyBaseUrl("http://127.0.0.1:8080"), undefined);
+});
+
+test("resolveFallbackBaseUrl substitutes variable defaults and yields a usable URL", () => {
+  const specs = [
+    spec(
+      document([
+        {
+          url: "https://{host}/api",
+          variables: { host: { default: "api.example.com" } },
+        },
+      ]),
+    ),
+  ];
+
+  const fallback = resolveFallbackBaseUrl(specs);
+  assert.deepEqual(fallback, {
+    url: "https://api.example.com/api",
+    source: "spec",
+  });
+  assert.equal(classifyBaseUrl(fallback.url), undefined);
+});
+
+test("resolveFallbackBaseUrl leaves a variable without a default unresolved", () => {
+  const specs = [
+    spec(
+      document([
+        {
+          url: "https://{host}/api",
+          variables: { host: {} },
+        },
+      ]),
+    ),
+  ];
+
+  const fallback = resolveFallbackBaseUrl(specs);
+  assert.equal(fallback.url, "https://{host}/api");
+  assert.equal(classifyBaseUrl(fallback.url), "unresolved-variable");
+});
+
+test("resolveFallbackBaseUrl preserves first-server-entry precedence (A3)", () => {
+  const specs = [
+    spec(
+      document([
+        { url: "/v1" },
+        { url: "https://later.example.com" },
+      ]),
+    ),
+  ];
+
+  const fallback = resolveFallbackBaseUrl(specs);
+  assert.equal(fallback.url, "/v1");
+  assert.equal(classifyBaseUrl(fallback.url), "relative");
 });
 
 // --- Determinism -----------------------------------------------------------

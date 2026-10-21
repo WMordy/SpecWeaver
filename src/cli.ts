@@ -32,7 +32,14 @@ import {
   WARNING_PREFIX,
   writeResultsFile,
 } from "./results.js";
-import { writeEmittedScript } from "./script/emit.js";
+import {
+  classifyBaseUrl,
+  redactBaseUrlForDiagnostics,
+  resolveFallbackBaseUrl,
+  writeEmittedScript,
+  type BaseUrlProblem,
+  type FallbackBaseUrl,
+} from "./script/emit.js";
 import {
   SpecError,
   loadSpecs,
@@ -150,6 +157,108 @@ function selectOperations(
     selected.push(operation);
   }
   return { selected, unmatched, duplicateWarnings: [] };
+}
+
+/**
+ * Quote a resolved base URL for a diagnostic, showing an empty value as `""`.
+ * Values that may contain credentials are replaced wholesale before quoting
+ * (SPEC-24 redaction hardening): no fragment of a potentially secret value is
+ * echoed, while benign values stay verbatim.
+ */
+function quoteBaseUrl(value: string): string {
+  return JSON.stringify(redactBaseUrlForDiagnostics(value));
+}
+
+/** A well-formed unresolved placeholder: a `{variable}` identifier token. */
+const PLACEHOLDER_TOKEN = /^\{[A-Za-z_][A-Za-z0-9_]*\}$/;
+
+/**
+ * Quote an unresolved placeholder token for a diagnostic.
+ *
+ * A well-formed `{identifier}` names a server variable, not a URL, so the
+ * base-URL allowlist would wrongly mask it as credential-bearing. Quote it
+ * verbatim; anything malformed or capable of carrying secret material still
+ * goes through {@link quoteBaseUrl}.
+ */
+function quotePlaceholder(value: string): string {
+  return PLACEHOLDER_TOKEN.test(value)
+    ? JSON.stringify(value)
+    : quoteBaseUrl(value);
+}
+
+/** Describe the loaded spec source(s) in a deterministic order. */
+function describeSpecSources(specs: readonly LoadedSpec[]): string {
+  const sources = specs.map((spec) => `"${spec.source}"`);
+  if (sources.length === 0) {
+    return "the loaded spec(s)";
+  }
+  return sources.length === 1 ? `spec ${sources[0]}` : `specs ${sources.join(", ")}`;
+}
+
+/**
+ * Render the SPEC-24 error for a fallback base URL that cannot be used.
+ *
+ * The message is deterministic, uses the existing `error:` prefix, names the
+ * spec source and offending value (or states that none exists), and names both
+ * remedies: configure `baseUrl` or add an absolute `servers[].url`.
+ */
+function formatBaseUrlError(
+  problem: BaseUrlProblem,
+  fallback: FallbackBaseUrl | undefined,
+  specs: readonly LoadedSpec[],
+): string {
+  const remedy =
+    "Set `baseUrl` in the config, or add an absolute `http(s)` `servers[].url` to the spec.";
+  const value = fallback?.url ?? "";
+  const origin =
+    fallback?.source === undefined
+      ? describeSpecSources(specs)
+      : `spec "${fallback.source}"`;
+
+  switch (problem) {
+    case "missing":
+      return [
+        `error: no request base URL was resolved from ${origin}: no string \`servers[].url\` is defined and no \`baseUrl\` is configured.`,
+        remedy,
+      ].join("\n");
+    case "empty":
+      return [
+        `error: request base URL from ${origin} is empty (${quoteBaseUrl(value)}) and no \`baseUrl\` is configured.`,
+        remedy,
+      ].join("\n");
+    case "surrounding-whitespace":
+      return [
+        `error: request base URL from ${origin} is not usable: ${quoteBaseUrl(value)} has surrounding whitespace, and no \`baseUrl\` is configured.`,
+        remedy,
+      ].join("\n");
+    case "embedded-whitespace":
+      return [
+        `error: request base URL from ${origin} is not usable: ${quoteBaseUrl(value)} contains embedded whitespace or control characters, and no \`baseUrl\` is configured.`,
+        remedy,
+      ].join("\n");
+    case "relative":
+      return [
+        `error: request base URL from ${origin} is not usable: ${quoteBaseUrl(value)} is not an absolute URL, and no \`baseUrl\` is configured.`,
+        remedy,
+      ].join("\n");
+    case "unsupported-protocol":
+      return [
+        `error: request base URL from ${origin} is not usable: ${quoteBaseUrl(value)} does not use the http or https protocol, and no \`baseUrl\` is configured.`,
+        remedy,
+      ].join("\n");
+    case "missing-host":
+      return [
+        `error: request base URL from ${origin} is not usable: ${quoteBaseUrl(value)} has no host, and no \`baseUrl\` is configured.`,
+        remedy,
+      ].join("\n");
+    case "unresolved-variable": {
+      const placeholder = value.match(/\{[^}]*\}|[{}]/)?.[0] ?? "{variable}";
+      return [
+        `error: request base URL from ${origin} is not usable: ${quoteBaseUrl(value)} still contains the unresolved server-variable placeholder ${quotePlaceholder(placeholder)}, and no \`baseUrl\` is configured. Give that variable a default, or use one of the remedies below.`,
+        remedy,
+      ].join("\n");
+    }
+  }
 }
 
 /**
@@ -281,6 +390,24 @@ async function run(options: CliOptions): Promise<number> {
     process.stderr.write(
       `${WARNING_PREFIX} operation "${method} ${path}" is not present in the loaded spec(s); skipping.\n`,
     );
+  }
+
+  // SPEC-24 base-URL usability gate (A1-A5). Without an explicit `baseUrl`, the
+  // request base URL is derived from the first `servers[].url`. A missing,
+  // empty, relative, non-http(s), or still-templated value would make k6 reject
+  // the emitted URL after starting, so fail here — after selection succeeded
+  // and before k6 preflight/generation/emission — with one actionable message.
+  // The gate is selector-independent; an explicit `baseUrl` is trusted verbatim
+  // and bypasses it (A2), preserving `resolveBaseUrl`'s precedence.
+  if (config.baseUrl === undefined) {
+    const fallback = resolveFallbackBaseUrl(loadedSpecs);
+    const problem = classifyBaseUrl(fallback?.url);
+    if (problem !== undefined) {
+      process.stderr.write(
+        `${formatBaseUrlError(problem, fallback, loadedSpecs)}\n`,
+      );
+      return EXIT_SPECWEAVER_ERROR;
+    }
   }
 
   // SPEC-7 preflight: k6 must resolve on PATH before we execute anything. It is

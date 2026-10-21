@@ -135,6 +135,8 @@ export const JSON_CONTENT_TYPE = "application/json";
 export interface EmitSpec {
   /** The fully `$ref`-resolved OpenAPI document. */
   readonly document: JsonObject;
+  /** The spec source path, when the caller has one (used in diagnostics). */
+  readonly source?: string;
 }
 
 /** Inputs to {@link emitScript}. */
@@ -257,8 +259,25 @@ function serverUrl(server: unknown): string | undefined {
   });
 }
 
-/** The first `servers[].url` across the specs, with variable defaults applied. */
-function firstServerUrl(specs: readonly EmitSpec[]): string | undefined {
+/** A resolved fallback `servers[].url` plus the spec source that supplied it. */
+export interface FallbackBaseUrl {
+  /** The first `servers[].url` across the specs, variable defaults applied. */
+  url: string;
+  /** The spec source that supplied {@link url}, when the spec carries one. */
+  source?: string;
+}
+
+/**
+ * Resolve the fallback base URL (A1): the first `servers[].url` across the
+ * specs, in spec order, with server-variable defaults substituted.
+ *
+ * Entries whose `url` is not a string are skipped, preserving the existing
+ * first-entry behaviour. The picked entry is returned with its source so the
+ * CLI can produce an actionable diagnostic.
+ */
+export function resolveFallbackBaseUrl(
+  specs: readonly EmitSpec[],
+): FallbackBaseUrl | undefined {
   for (const spec of specs) {
     const servers = spec.document.servers;
     if (!Array.isArray(servers)) {
@@ -267,9 +286,224 @@ function firstServerUrl(specs: readonly EmitSpec[]): string | undefined {
     for (const server of servers) {
       const url = serverUrl(server);
       if (url !== undefined) {
-        return url;
+        return spec.source === undefined ? { url } : { url, source: spec.source };
       }
     }
+  }
+  return undefined;
+}
+
+/**
+ * Why a resolved fallback base URL cannot be used as a request base URL (A4).
+ *
+ * - `missing`: no string `servers[].url` was found at all.
+ * - `empty`: the resolved value is empty (or whitespace only).
+ * - `surrounding-whitespace`: the value would be emitted untrimmed.
+ * - `embedded-whitespace`: the value contains internal whitespace or ASCII
+ *   control characters (the WHATWG parser would silently strip some of them).
+ * - `relative`: the value does not parse as an absolute URL.
+ * - `unsupported-protocol`: it is absolute but not `http:`/`https:`.
+ * - `missing-host`: it is http(s) but has no host.
+ * - `unresolved-variable`: a missing/malformed `{variable}` placeholder survived
+ *   substitution (including an empty `{}` name).
+ */
+export type BaseUrlProblem =
+  | "missing"
+  | "empty"
+  | "surrounding-whitespace"
+  | "embedded-whitespace"
+  | "relative"
+  | "unsupported-protocol"
+  | "missing-host"
+  | "unresolved-variable";
+
+/**
+ * The whole-value replacement used when a diagnostic value does not match the
+ * strict allowlist below. Deliberately contains no fragment of the original
+ * value: arbitrary malformed input is never partially parsed or echoed.
+ */
+export const REDACTED_BASE_URL_MARKER =
+  "*** (value redacted: may contain credentials)";
+
+/** Shape 2: a root-relative path such as `/v1`. */
+const ROOT_RELATIVE_PATH = /^\/[A-Za-z0-9._~\-/]*$/;
+
+/**
+ * Shape 3: a relative host/path with no scheme, userinfo, query, fragment, or
+ * `=`, such as `api.example.com/v1`.
+ */
+const RELATIVE_HOST_PATH = /^[A-Za-z0-9.-]+(\/[A-Za-z0-9._~\-/]*)?$/;
+
+/**
+ * Shape 4: an absolute `scheme://host/path` with no userinfo, query, fragment,
+ * `=`, braces, or whitespace, such as `ftp://example.com` or
+ * `https://api.example.com/v1/`.
+ */
+const ABSOLUTE_URL =
+  /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^{}\s@?#=]+(\/[^{}\s@?#=]*)?$/;
+
+/**
+ * Shape 5: the absolute shape above when its braces are `{variable}`
+ * placeholders, such as `https://{host}/api`. Brace contents are validated
+ * separately by {@link hasOnlyNamedPlaceholders}, since this character class
+ * cannot enforce a non-empty identifier.
+ */
+const ABSOLUTE_TEMPLATE_URL =
+  /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[A-Za-z0-9._~{}:\-/]*$/;
+
+/** A placeholder name: a non-empty identifier with no braces. */
+const PLACEHOLDER_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Structural authority check for shape 4. The shape's character class allows
+ * `:`, so without this `ftp://user:secret` would look safe even though it is
+ * userinfo. Accept only a bare host, `host:port` with a numeric port, or a
+ * bracketed IPv6 literal with an optional numeric port.
+ */
+function hasSafeAuthority(value: string): boolean {
+  const match = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#]*)/.exec(value);
+  if (match === null) {
+    return false;
+  }
+  const authority = match[1];
+  if (authority.startsWith("[")) {
+    const close = authority.indexOf("]");
+    if (close === -1) {
+      return false;
+    }
+    const rest = authority.slice(close + 1);
+    return rest === "" || /^:\d+$/.test(rest);
+  }
+  const parts = authority.split(":");
+  if (parts.length === 1) {
+    return true;
+  }
+  if (parts.length === 2) {
+    return /^\d+$/.test(parts[1]);
+  }
+  return false;
+}
+
+/**
+ * Whether every brace pair in `value` wraps a non-empty identifier and at least
+ * one such placeholder exists. Stray or malformed braces fail.
+ */
+function hasOnlyNamedPlaceholders(value: string): boolean {
+  let sawPlaceholder = false;
+  let invalid = false;
+  const stripped = value.replace(/\{([^{}]*)\}/g, (_match, name: string) => {
+    sawPlaceholder = true;
+    if (!PLACEHOLDER_NAME.test(name)) {
+      invalid = true;
+    }
+    return "";
+  });
+  return sawPlaceholder && !invalid && !/[{}]/.test(stripped);
+}
+
+/**
+ * Redact a base URL before quoting it in a diagnostic.
+ *
+ * Strict allowlist: the value is returned verbatim only when it matches one of
+ * the safe shapes — empty, root-relative, relative host/path, absolute
+ * `scheme://host/path`, or that absolute shape with well-formed `{variable}`
+ * placeholders. Everything else, including any value containing `@`, `=`, `?`,
+ * `#`, whitespace/control characters, userinfo-like authorities without `@`,
+ * or malformed braces, is replaced wholesale with
+ * {@link REDACTED_BASE_URL_MARKER}. There is no partial parsing and no
+ * exception path, so no fragment of an unrecognised value can leak.
+ *
+ * String-based on purpose: the value is often *not* a valid URL (that is why it
+ * is being reported), so `new URL` cannot be relied on. Redaction runs before
+ * the value is JSON-quoted for the message.
+ */
+export function redactBaseUrlForDiagnostics(value: string): string {
+  // Shape 1: the empty string.
+  if (value === "") {
+    return value;
+  }
+
+  // Control characters (including NUL and the ASCII whitespace controls) never
+  // appear in a safe shape; mask before any shape can accidentally allow one.
+  if (/[\u0000-\u001f\u007f]/.test(value)) {
+    return REDACTED_BASE_URL_MARKER;
+  }
+
+  // Shape 2: root-relative path.
+  if (ROOT_RELATIVE_PATH.test(value)) {
+    return value;
+  }
+
+  // Shape 3: relative host/path.
+  if (RELATIVE_HOST_PATH.test(value)) {
+    return value;
+  }
+
+  // Shape 4: absolute URL with a structurally safe authority.
+  if (ABSOLUTE_URL.test(value) && hasSafeAuthority(value)) {
+    return value;
+  }
+
+  // Shape 5: absolute URL whose only braces are named placeholders.
+  if (ABSOLUTE_TEMPLATE_URL.test(value) && hasOnlyNamedPlaceholders(value)) {
+    return value;
+  }
+
+  return REDACTED_BASE_URL_MARKER;
+}
+
+/**
+ * Classify a resolved fallback base URL as usable or not (A4).
+ *
+ * "Usable" means it parses as an absolute URL whose protocol is `http:` or
+ * `https:`, has a non-empty host, and contains no unresolved `{variable}`
+ * placeholder. Returns `undefined` when usable, otherwise the problem.
+ *
+ * Server-variable defaults are substituted before this runs by
+ * {@link resolveFallbackBaseUrl}; any placeholder still present here has no
+ * default and is therefore unresolved.
+ */
+export function classifyBaseUrl(
+  value: string | undefined,
+): BaseUrlProblem | undefined {
+  if (value === undefined) {
+    return "missing";
+  }
+  if (value.trim() === "") {
+    return "empty";
+  }
+  // Surrounding whitespace would be emitted verbatim into the request URL.
+  // Require the resolved value to already be clean rather than trimming it
+  // silently, so the diagnostic points at the spec (A4).
+  if (value !== value.trim()) {
+    return "surrounding-whitespace";
+  }
+  // Reject internal whitespace and ASCII control characters too. The WHATWG
+  // parser silently strips tabs/newlines (and trims spaces), so accepting them
+  // would emit a broken URL that only k6 rejects later. `\s` also catches
+  // whitespace beyond ASCII; the explicit ranges catch other control bytes.
+  if (/[\s\u0000-\u001f\u007f]/.test(value)) {
+    return "embedded-whitespace";
+  }
+  // Checked before parsing: the WHATWG URL parser accepts `{...}` in a host,
+  // which would otherwise hide the real problem behind a downstream k6 error.
+  // Match any remaining brace so a malformed placeholder (`{}`, `{host`, ...)
+  // is treated as unresolved too, not just a well-formed `{name}`.
+  if (/[{}]/.test(value)) {
+    return "unresolved-variable";
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return "relative";
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return "unsupported-protocol";
+  }
+  if (parsed.host === "") {
+    return "missing-host";
   }
   return undefined;
 }
@@ -278,9 +512,17 @@ function firstServerUrl(specs: readonly EmitSpec[]): string | undefined {
  * Resolve the request base URL (A1): the config `baseUrl` override wins, else
  * the spec's first `servers[].url` (server-variable defaults substituted), else
  * the empty string.
+ *
+ * This pure behaviour is unchanged by the SPEC-24 CLI usability gate, which
+ * judges the fallback value separately via {@link resolveFallbackBaseUrl} and
+ * {@link classifyBaseUrl}.
  */
 export function resolveBaseUrl(input: Pick<EmitInput, "config" | "specs">): string {
-  return configBaseUrl(input.config) ?? firstServerUrl(input.specs ?? []) ?? "";
+  return (
+    configBaseUrl(input.config) ??
+    resolveFallbackBaseUrl(input.specs ?? [])?.url ??
+    ""
+  );
 }
 
 /**

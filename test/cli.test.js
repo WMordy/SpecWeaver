@@ -5,15 +5,18 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { parseArgs } from "../dist/args.js";
 import { EXIT_SPECWEAVER_ERROR, EXIT_SUCCESS } from "../dist/results.js";
+import { REDACTED_BASE_URL_MARKER } from "../dist/script/emit.js";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const pkg = JSON.parse(
@@ -77,6 +80,67 @@ function writeFakeK6(dir, code = 0) {
   writeFileSync(file, `#!/bin/sh\nexit ${code}\n`);
   chmodSync(file, 0o755);
   return file;
+}
+
+/** Write a fake `k6` that records invocation by creating `markerPath`. */
+function writeTrackingK6(dir, markerPath, code = 0) {
+  const file = join(dir, "k6");
+  writeFileSync(file, `#!/bin/sh\n: > '${markerPath}'\nexit ${code}\n`);
+  chmodSync(file, 0o755);
+  return file;
+}
+
+/**
+ * Write a minimal valid spec with `GET /pets` and the given `servers`.
+ * `undefined` omits the `servers` member entirely.
+ */
+function writeServersSpec(dir, name, servers) {
+  const specPath = join(dir, name);
+  const document = {
+    openapi: "3.0.3",
+    info: { title: name, version: "1" },
+    paths: { "/pets": { get: apiOperation() } },
+  };
+  if (servers !== undefined) {
+    document.servers = servers;
+  }
+  writeFileSync(specPath, JSON.stringify(document));
+  return specPath;
+}
+
+/**
+ * Run the built CLI against `configText` with a fake k6 on PATH and a private
+ * TMPDIR. Returns the run plus the paths/state needed to assert the SPEC-24
+ * boundary: whether k6 was invoked and which artifacts (if any) were written.
+ */
+function runSandboxed(dir, configText, { k6Code = 0, keepTemp = false } = {}) {
+  const binDir = mkdtempSync(join(tmpdir(), "specweaver-bin-"));
+  const k6Marker = join(dir, "k6-invoked");
+  writeTrackingK6(binDir, k6Marker, k6Code);
+  const sandbox = mkdtempSync(join(tmpdir(), "specweaver-tmp-"));
+  const configPath = join(dir, "specweaver.yaml");
+  const resultsPath = join(dir, "results.json");
+  writeFileSync(configPath, configText);
+  const env = { ...process.env, PATH: binDir, TMPDIR: sandbox };
+  if (keepTemp) {
+    env.SPECWEAVER_KEEP_TEMP = "1";
+  }
+  const result = runCli(["--config", configPath, "--out", resultsPath], { env });
+  return { result, resultsPath, sandbox, k6Marker };
+}
+
+/**
+ * Assert the SPEC-24 pre-k6 failure contract: exit 2, an `error:` message, no
+ * k6 invocation, no generated artifacts, and no results file.
+ */
+function assertBaseUrlGateFailure(run) {
+  assert.equal(run.result.status, EXIT_SPECWEAVER_ERROR, run.result.stderr);
+  assert.match(run.result.stderr, /^error: /m);
+  assert.doesNotMatch(run.result.stdout, /k6 found:/);
+  assert.equal(existsSync(run.k6Marker), false, "k6 must not be invoked");
+  assert.deepEqual(readdirSync(run.sandbox), [], "no generated script/data");
+  assert.equal(existsSync(run.resultsPath), false, "no results file");
+  assert.doesNotMatch(run.result.stderr, /\bat .+:\d+:\d+/);
 }
 
 test("built CLI --help exits 0 and lists the core flags", () => {
@@ -571,6 +635,400 @@ test("built CLI with operations: all and no specs still exits 2 on the specs req
   assert.doesNotMatch(result.stderr, /selected no operations/);
   assert.doesNotMatch(result.stdout, /SpecWeaver run summary/);
   assert.equal(existsSync(resultsPath), false);
+});
+
+// --- SPEC-24: base-URL usability gate -------------------------------------
+
+test("built CLI exits 2 before k6 when no servers URL resolves a base URL", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writeServersSpec(dir, "openapi.json", undefined);
+  const run = runSandboxed(
+    dir,
+    `specs:\n  - ${specPath}\noperations: all\n`,
+  );
+
+  assertBaseUrlGateFailure(run);
+  assert.ok(run.result.stderr.includes(specPath), run.result.stderr);
+  assert.match(
+    run.result.stderr,
+    /error: no request base URL was resolved from spec ".*openapi\.json": no string `servers\[\]\.url` is defined/,
+  );
+  assert.match(
+    run.result.stderr,
+    /Set `baseUrl` in the config, or add an absolute `http\(s\)` `servers\[\]\.url` to the spec\./,
+  );
+  assert.doesNotMatch(run.result.stdout, /SpecWeaver run summary/);
+});
+
+test("built CLI exits 2 when the resolved servers URL is empty", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writeServersSpec(dir, "empty.json", [{ url: "" }]);
+  const run = runSandboxed(
+    dir,
+    `specs:\n  - ${specPath}\noperations: all\n`,
+  );
+
+  assertBaseUrlGateFailure(run);
+  assert.ok(run.result.stderr.includes(specPath), run.result.stderr);
+  assert.match(
+    run.result.stderr,
+    /error: request base URL from spec ".*empty\.json" is empty \(""\)/,
+  );
+});
+
+test("built CLI exits 2 when the resolved servers URL is relative", () => {
+  for (const value of ["/v1", "api.example.com/v1"]) {
+    const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+    const specPath = writeServersSpec(dir, "relative.json", [{ url: value }]);
+    const run = runSandboxed(
+      dir,
+      `specs:\n  - ${specPath}\noperations: all\n`,
+    );
+
+    assertBaseUrlGateFailure(run);
+    assert.ok(run.result.stderr.includes(specPath), run.result.stderr);
+    assert.ok(
+      run.result.stderr.includes(
+        `is not usable: ${JSON.stringify(value)} is not an absolute URL`,
+      ),
+      run.result.stderr,
+    );
+  }
+});
+
+test("built CLI exits 2 for non-http(s) and unresolved-variable servers URLs", () => {
+  for (const [value, expected, quoted] of [
+    ["ftp://example.com", /does not use the http or https protocol/, true],
+    [
+      "https://{host}/api",
+      /still contains the unresolved server-variable placeholder/,
+      true,
+    ],
+    [
+      "https://{}/api",
+      /still contains the unresolved server-variable placeholder/,
+      false,
+    ],
+  ]) {
+    const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+    const specPath = writeServersSpec(dir, "unusable.json", [{ url: value }]);
+    const run = runSandboxed(
+      dir,
+      `specs:\n  - ${specPath}\noperations: all\n`,
+    );
+
+    assertBaseUrlGateFailure(run);
+    assert.ok(run.result.stderr.includes(specPath), run.result.stderr);
+    assert.ok(
+      run.result.stderr.includes(
+        quoted
+          ? `is not usable: ${JSON.stringify(value)}`
+          : `is not usable: ${JSON.stringify(REDACTED_BASE_URL_MARKER)}`,
+      ),
+      run.result.stderr,
+    );
+    assert.match(run.result.stderr, expected);
+  }
+});
+
+test("built CLI wholistically masks every secret-bearing servers URL form", () => {
+  for (const value of [
+    // The motivating bypasses.
+    "https://api.example.com/v1?access_token =SUPERSECRET",
+    "https://api.example.com/v1?access_token\n=SUPERSECRET",
+    "user:SEKRIT",
+    "api.example.com/v1?jwt=SUPERSECRET",
+    // Previously covered forms.
+    "api.example.com/v1?client_secret=SUPERSECRET",
+    "api.example.com/v1?X-Amz-Signature=SUPERSECRET",
+    "api.example.com/v1#access_token=SUPERSECRET",
+    "ftp://user:SUPERSECRET/part@example.com",
+    "ftp://user:SUPERSECRET part@example.com",
+    "//user:SUPERSECRET@example.com",
+    // Adversarial malformed forms: userinfo behind ?/#, whitespace tails, and
+    // userinfo-like values without an authority `//`.
+    "ftp://user:SEKRIT_P?x@example.com",
+    "ftp://user:SEKRIT_Q#x@example.com",
+    "ftp://user:SEKRIT/?x=y@example.com",
+    "api.example.com/v1?access_token=abc SEKRIT_SUFFIX",
+    "api.example.com/v1?access_token=abc\tSEKRIT_SUFFIX",
+    "user:SEKRIT_R@example.com",
+    "ftp://user:SEKRIT",
+    "//user:SEKRIT",
+    "https://:x",
+    // Embedded whitespace/control characters.
+    "https://api.example.com\t/v1",
+    "https://api.example.com\n/v1",
+    "https://api.example.com\r/v1",
+    "https://api.example.com\f/v1",
+    "https://api.example.com\v/v1",
+    "https://api.example.com /v1",
+    "https://api.example.com\u0000/v1",
+    " https://api.example.com ",
+    // Malformed or empty brace placeholders.
+    "https://{}/api",
+    "https://{host/api",
+    "https://api.example.com/{version",
+    "https://api.example.com/version}",
+    "https://{{host}}/api",
+  ]) {
+    const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+    const specPath = writeServersSpec(dir, "secret.json", [{ url: value }]);
+    const run = runSandboxed(
+      dir,
+      `specs:\n  - ${specPath}\noperations: all\n`,
+    );
+
+    assertBaseUrlGateFailure(run);
+    assert.ok(run.result.stderr.includes(specPath), run.result.stderr);
+    assert.ok(
+      run.result.stderr.includes(
+        `is not usable: ${JSON.stringify(REDACTED_BASE_URL_MARKER)}`,
+      ),
+      run.result.stderr,
+    );
+    // The diagnostic still names the failure class and both remedies.
+    assert.match(
+      run.result.stderr,
+      /(is not an absolute URL|does not use the http or https protocol|contains embedded whitespace or control characters|has surrounding whitespace|still contains the unresolved server-variable placeholder)/,
+    );
+    assert.match(
+      run.result.stderr,
+      /Set `baseUrl` in the config, or add an absolute `http\(s\)` `servers\[\]\.url` to the spec\./,
+    );
+    // No secret marker and no raw value, including any fragment of it.
+    assert.doesNotMatch(run.result.stderr, /SEKRIT|SUPERSECRET/i);
+    assert.doesNotMatch(
+      run.result.stderr,
+      /user:|access_token|client_secret|Signature=|jwt=/,
+    );
+    assert.equal(
+      run.result.stderr.includes(value),
+      false,
+      `raw value leaked: ${JSON.stringify(value)}`,
+    );
+  }
+});
+
+test("built CLI quotes benign servers URLs in the failure diagnostic", () => {
+  for (const value of [
+    "/v1",
+    "api.example.com/v1",
+    "ftp://example.com",
+    "https://{host}/api",
+  ]) {
+    const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+    const specPath = writeServersSpec(dir, "benign.json", [{ url: value }]);
+    const run = runSandboxed(
+      dir,
+      `specs:\n  - ${specPath}\noperations: all\n`,
+    );
+
+    assertBaseUrlGateFailure(run);
+    assert.ok(run.result.stderr.includes(specPath), run.result.stderr);
+    assert.ok(
+      run.result.stderr.includes(
+        `is not usable: ${JSON.stringify(value)}`,
+      ),
+      run.result.stderr,
+    );
+  }
+
+  // The empty string is quoted too, in the dedicated "is empty" diagnostic.
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writeServersSpec(dir, "benign-empty.json", [{ url: "" }]);
+  const run = runSandboxed(
+    dir,
+    `specs:\n  - ${specPath}\noperations: all\n`,
+  );
+  assertBaseUrlGateFailure(run);
+  assert.match(run.result.stderr, /is empty \(""\)/);
+  assert.doesNotMatch(run.result.stderr, /value redacted/);
+});
+
+test("built CLI quotes an unresolved placeholder by name, not as a redacted URL", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const value = "https://{host}/api";
+  const specPath = writeServersSpec(dir, "placeholder.json", [{ url: value }]);
+  const run = runSandboxed(
+    dir,
+    `specs:\n  - ${specPath}\noperations: all\n`,
+  );
+
+  assertBaseUrlGateFailure(run);
+  // The whole URL is benign, so the allowlist quotes it verbatim.
+  assert.ok(
+    run.result.stderr.includes(`is not usable: ${JSON.stringify(value)}`),
+    run.result.stderr,
+  );
+  // The placeholder is a variable identifier, not a URL: no redaction.
+  assert.ok(
+    run.result.stderr.includes(
+      `still contains the unresolved server-variable placeholder "{host}"`,
+    ),
+    run.result.stderr,
+  );
+  assert.doesNotMatch(run.result.stderr, /placeholder \*\*\* \(value redacted/);
+});
+
+test("built CLI still masks a credential-bearing URL with an unresolved placeholder", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const value = "https://{user:SEKRIT@example.com}/api";
+  const specPath = writeServersSpec(dir, "credential-placeholder.json", [
+    { url: value },
+  ]);
+  const run = runSandboxed(
+    dir,
+    `specs:\n  - ${specPath}\noperations: all\n`,
+  );
+
+  assertBaseUrlGateFailure(run);
+  assert.ok(
+    run.result.stderr.includes(
+      `is not usable: ${JSON.stringify(REDACTED_BASE_URL_MARKER)}`,
+    ),
+    run.result.stderr,
+  );
+  assert.match(
+    run.result.stderr,
+    /still contains the unresolved server-variable placeholder/,
+  );
+  assert.doesNotMatch(run.result.stderr, /SEKRIT/);
+});
+
+test("built CLI rejects embedded whitespace/control characters before k6", () => {
+  for (const value of [
+    "https://api.example.com\t/v1",
+    "https://api.example.com\n/v1",
+    "https://api.example.com\r/v1",
+    "https://api.example.com\f/v1",
+    "https://api.example.com\v/v1",
+    "https://api.example.com /v1",
+  ]) {
+    const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+    const specPath = writeServersSpec(dir, "whitespace.json", [{ url: value }]);
+    const run = runSandboxed(
+      dir,
+      `specs:\n  - ${specPath}\noperations: all\n`,
+    );
+
+    assertBaseUrlGateFailure(run);
+    assert.ok(run.result.stderr.includes(specPath), run.result.stderr);
+    assert.ok(
+      run.result.stderr.includes(
+        `is not usable: ${JSON.stringify(REDACTED_BASE_URL_MARKER)} contains embedded whitespace or control characters`,
+      ),
+      run.result.stderr,
+    );
+    assert.equal(run.result.stderr.includes(value), false);
+  }
+});
+
+test("built CLI rejects surrounding whitespace before k6", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writeServersSpec(dir, "whitespace.json", [
+    { url: " https://api.example.com " },
+  ]);
+  const run = runSandboxed(
+    dir,
+    `specs:\n  - ${specPath}\noperations: all\n`,
+  );
+
+  assertBaseUrlGateFailure(run);
+  assert.ok(run.result.stderr.includes(specPath), run.result.stderr);
+  assert.ok(
+    run.result.stderr.includes(
+      `is not usable: ${JSON.stringify(REDACTED_BASE_URL_MARKER)} has surrounding whitespace`,
+    ),
+    run.result.stderr,
+  );
+  assert.equal(run.result.stderr.includes(" https://api.example.com "), false);
+});
+
+test("built CLI explicit baseUrl bypasses the gate under operations: all", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writeServersSpec(dir, "openapi.json", [{ url: "/v1" }]);
+  const run = runSandboxed(
+    dir,
+    `specs:\n  - ${specPath}\noperations: all\nbaseUrl: https://staging.example.com\n`,
+    { keepTemp: true },
+  );
+
+  assert.equal(run.result.status, EXIT_SUCCESS, run.result.stderr);
+  assert.equal(existsSync(run.k6Marker), true, "k6 should have been invoked");
+  assert.match(run.result.stdout, /k6 found:/);
+  assert.equal(existsSync(run.resultsPath), true);
+
+  const generated = run.result.stdout.match(/^Generated k6 script: (.+)$/m);
+  assert.ok(generated, `expected a generated-script path:\n${run.result.stdout}`);
+  const dataPath = join(
+    dirname(generated[1].trim()),
+    "specweaver.data.json",
+  );
+  const data = JSON.parse(readFileSync(dataPath, "utf8"));
+  assert.equal(data.baseUrl, "https://staging.example.com");
+});
+
+test("built CLI accepts a valid absolute servers URL with substituted variable defaults", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writeServersSpec(dir, "openapi.json", [
+    {
+      url: "https://{host}/api",
+      variables: { host: { default: "api.example.com" } },
+    },
+  ]);
+  const run = runSandboxed(
+    dir,
+    `specs:\n  - ${specPath}\noperations: all\n`,
+    { keepTemp: true },
+  );
+
+  assert.equal(run.result.status, EXIT_SUCCESS, run.result.stderr);
+  assert.equal(existsSync(run.k6Marker), true, "k6 should have been invoked");
+  assert.equal(existsSync(run.resultsPath), true);
+
+  const generated = run.result.stdout.match(/^Generated k6 script: (.+)$/m);
+  assert.ok(generated, `expected a generated-script path:\n${run.result.stdout}`);
+  const dataPath = join(
+    dirname(generated[1].trim()),
+    "specweaver.data.json",
+  );
+  const data = JSON.parse(readFileSync(dataPath, "utf8"));
+  assert.equal(data.baseUrl, "https://api.example.com/api");
+});
+
+test("built CLI applies the base-URL gate to explicit operation lists too", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writeServersSpec(dir, "openapi.json", [{ url: "/v1" }]);
+  const run = runSandboxed(
+    dir,
+    `specs:\n  - ${specPath}\noperations:\n  - method: GET\n    path: /pets\n`,
+  );
+
+  assertBaseUrlGateFailure(run);
+  assert.ok(run.result.stderr.includes(specPath), run.result.stderr);
+  assert.ok(
+    run.result.stderr.includes(
+      'is not usable: "/v1" is not an absolute URL',
+    ),
+    run.result.stderr,
+  );
+});
+
+test("built CLI base-URL failure is deterministic across repeated runs", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writeServersSpec(dir, "openapi.json", [{ url: "" }]);
+  const config = `specs:\n  - ${specPath}\noperations: all\n`;
+
+  const first = runSandboxed(dir, config);
+  const second = runSandboxed(dir, config);
+
+  assertBaseUrlGateFailure(first);
+  assertBaseUrlGateFailure(second);
+  assert.equal(first.result.status, second.result.status);
+  assert.equal(first.result.stderr, second.result.stderr);
+  // Leave no kept artifacts behind from the success-path tests.
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test("built CLI with an invalid config exits non-zero and names the field", () => {

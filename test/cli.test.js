@@ -51,6 +51,26 @@ function writeSpec31(dir, document) {
   return specPath;
 }
 
+/** One minimal OpenAPI operation object (a 200 response is all v1 needs). */
+function apiOperation() {
+  return { responses: { "200": { description: "ok" } } };
+}
+
+/** Write a valid OpenAPI 3.0 document with the given `paths` under `name`. */
+function writePathsSpec(dir, name, paths) {
+  const specPath = join(dir, name);
+  writeFileSync(
+    specPath,
+    JSON.stringify({
+      openapi: "3.0.3",
+      info: { title: name, version: "1" },
+      servers: [{ url: "http://127.0.0.1:1" }],
+      paths,
+    }),
+  );
+  return specPath;
+}
+
 /** Write a fake `k6` executable that exits with `code`. */
 function writeFakeK6(dir, code = 0) {
   const file = join(dir, "k6");
@@ -352,11 +372,205 @@ operations:
     result.stderr,
     /warning: operation "GET \/missing" is not present in the loaded spec\(s\); skipping/,
   );
+  // The explicit-list startup summary keeps its count-based line (SPEC-23).
+  assert.match(
+    result.stdout,
+    /Loaded config: 2 operation\(s\), 1 spec source\(s\)\./,
+  );
+  assert.doesNotMatch(result.stdout, /operations = all/);
   assert.match(result.stdout, /SpecWeaver run summary/);
   assert.equal(existsSync(resultsPath), true);
   const results = JSON.parse(readFileSync(resultsPath, "utf8"));
   assert.equal(results.outcome, "success");
   assert.ok(results.checks["GET /pets"], JSON.stringify(results.checks));
+});
+
+test("built CLI selects the whole catalog for operations: all in catalog order", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  // Path keys are deliberately not alphabetical and the methods within `/z`
+  // are out of canonical order: selection must follow document path order,
+  // then canonical method order (get, post, put, ...).
+  const specPath = writePathsSpec(dir, "openapi.json", {
+    "/z": { post: apiOperation(), get: apiOperation() },
+    "/a": { delete: apiOperation() },
+  });
+  const configPath = join(dir, "specweaver.yaml");
+  const resultsPath = join(dir, "results.json");
+  writeFileSync(configPath, `specs:\n  - ${specPath}\noperations: all\n`);
+
+  const binDir = mkdtempSync(join(tmpdir(), "specweaver-bin-"));
+  writeFakeK6(binDir, 0);
+  const sandbox = mkdtempSync(join(tmpdir(), "specweaver-tmp-"));
+  const result = runCli(["--config", configPath, "--out", resultsPath], {
+    env: { ...process.env, PATH: binDir, TMPDIR: sandbox },
+  });
+
+  assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+  // Selector-aware summary line, not an operation count (SPEC-23).
+  assert.match(result.stdout, /Loaded config: operations = all, 1 spec source\(s\)\./);
+  assert.doesNotMatch(result.stderr, /none of the configured operations were found/);
+  assert.equal(existsSync(resultsPath), true);
+  const results = JSON.parse(readFileSync(resultsPath, "utf8"));
+  assert.deepEqual(Object.keys(results.checks), [
+    "GET /z",
+    "POST /z",
+    "DELETE /a",
+  ]);
+});
+
+test("built CLI selects all operations across two specs in specs-then-catalog order", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const firstSpec = writePathsSpec(dir, "first.json", {
+    "/z": { post: apiOperation(), get: apiOperation() },
+    "/a": { delete: apiOperation() },
+  });
+  const secondSpec = writePathsSpec(dir, "second.json", {
+    "/m": { put: apiOperation() },
+    "/b": { patch: apiOperation(), get: apiOperation() },
+  });
+  const configPath = join(dir, "specweaver.yaml");
+  const resultsPath = join(dir, "results.json");
+  writeFileSync(
+    configPath,
+    `specs:\n  - ${firstSpec}\n  - ${secondSpec}\noperations: all\n`,
+  );
+
+  const binDir = mkdtempSync(join(tmpdir(), "specweaver-bin-"));
+  writeFakeK6(binDir, 0);
+  const sandbox = mkdtempSync(join(tmpdir(), "specweaver-tmp-"));
+  const result = runCli(["--config", configPath, "--out", resultsPath], {
+    env: { ...process.env, PATH: binDir, TMPDIR: sandbox },
+  });
+
+  assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+  assert.match(result.stdout, /Resolved specs: 6 operation\(s\) in the catalog\./);
+  assert.equal(existsSync(resultsPath), true);
+  const results = JSON.parse(readFileSync(resultsPath, "utf8"));
+  // Exactly the union, first spec's catalog entirely before the second's.
+  assert.deepEqual(Object.keys(results.checks), [
+    "GET /z",
+    "POST /z",
+    "DELETE /a",
+    "PUT /m",
+    "GET /b",
+    "PATCH /b",
+  ]);
+});
+
+test("built CLI collapses cross-spec duplicates under operations: all and warns once", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const firstSpec = writePathsSpec(dir, "first.json", {
+    "/pets": { get: apiOperation(), post: apiOperation() },
+  });
+  const secondSpec = writePathsSpec(dir, "second.json", {
+    "/pets": { get: apiOperation() },
+    "/other": { delete: apiOperation() },
+  });
+  const configPath = join(dir, "specweaver.yaml");
+  const binDir = mkdtempSync(join(tmpdir(), "specweaver-bin-"));
+  writeFakeK6(binDir, 0);
+  const sandbox = mkdtempSync(join(tmpdir(), "specweaver-tmp-"));
+  const duplicateWarning = `warning: operation "GET /pets" is defined in both "${firstSpec}" and "${secondSpec}"; keeping the first occurrence and skipping the duplicate.`;
+
+  function runOnce(resultsPath) {
+    return runCli(["--config", configPath, "--out", resultsPath], {
+      env: { ...process.env, PATH: binDir, TMPDIR: sandbox },
+    });
+  }
+
+  writeFileSync(
+    configPath,
+    `specs:\n  - ${firstSpec}\n  - ${secondSpec}\noperations: all\n`,
+  );
+  const firstResultsPath = join(dir, "results-1.json");
+  const firstRun = runOnce(firstResultsPath);
+  const secondResultsPath = join(dir, "results-2.json");
+  const secondRun = runOnce(secondResultsPath);
+
+  for (const run of [firstRun, secondRun]) {
+    assert.equal(run.status, EXIT_SUCCESS, run.stderr);
+    assert.equal(
+      run.stderr.split(duplicateWarning).length - 1,
+      1,
+      `exactly one duplicate warning expected:\n${run.stderr}`,
+    );
+  }
+  const firstKeys = Object.keys(
+    JSON.parse(readFileSync(firstResultsPath, "utf8")).checks,
+  );
+  const secondKeys = Object.keys(
+    JSON.parse(readFileSync(secondResultsPath, "utf8")).checks,
+  );
+  // First catalog occurrence wins; the duplicate is not emitted twice.
+  assert.deepEqual(firstKeys, ["GET /pets", "POST /pets", "DELETE /other"]);
+  assert.deepEqual(firstKeys, secondKeys);
+});
+
+test("built CLI exits 2 with an all-specific message when operations: all has an empty catalog", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writeSpec31(dir, {
+    openapi: "3.1.0",
+    info: { title: "Hooks", version: "1" },
+    webhooks: {
+      newPet: {
+        post: { responses: { "200": { description: "ok" } } },
+      },
+    },
+  });
+  const configPath = join(dir, "specweaver.yaml");
+  const resultsPath = join(dir, "results.json");
+  writeFileSync(
+    configPath,
+    `specs:
+  - ${specPath}
+operations: all
+payloads:
+  - method: POST
+    path: /pets
+    body:
+      name: Rex
+`,
+  );
+
+  const result = runCli(["--config", configPath, "--out", resultsPath]);
+
+  assert.equal(result.status, EXIT_SPECWEAVER_ERROR, result.stderr);
+  // SPEC-15 still explains the zero-operation spec.
+  assert.match(
+    result.stderr,
+    /warning: spec ".*openapi31\.json" contributes zero operations/,
+  );
+  // SPEC-23's own zero-selection message, not SPEC-14's explicit-list wording.
+  assert.match(
+    result.stderr,
+    /error: `operations: all` selected no operations: the loaded spec\(s\) contribute no catalogued operations/,
+  );
+  assert.doesNotMatch(result.stderr, /none of the configured operations were found/);
+  assert.doesNotMatch(result.stderr, /Unmatched operations:/);
+  // SPEC-13 still reports overrides that can never be applied.
+  assert.match(
+    result.stderr,
+    /warning: payload override for "POST \/pets" does not match any selected operation/,
+  );
+  assert.doesNotMatch(result.stdout, /SpecWeaver run summary/);
+  assert.equal(existsSync(resultsPath), false);
+});
+
+test("built CLI with operations: all and no specs still exits 2 on the specs requirement", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const configPath = join(dir, "specweaver.yaml");
+  const resultsPath = join(dir, "results.json");
+  writeFileSync(configPath, "operations: all\n");
+
+  const result = runCli(["--config", configPath, "--out", resultsPath]);
+
+  assert.equal(result.status, EXIT_SPECWEAVER_ERROR, result.stderr);
+  assert.match(result.stderr, /`specs` is required to execute operations/);
+  assert.match(result.stderr, /no spec source is configured/);
+  // No catalog expansion was attempted: the all-specific message never appears.
+  assert.doesNotMatch(result.stderr, /selected no operations/);
+  assert.doesNotMatch(result.stdout, /SpecWeaver run summary/);
+  assert.equal(existsSync(resultsPath), false);
 });
 
 test("built CLI with an invalid config exits non-zero and names the field", () => {

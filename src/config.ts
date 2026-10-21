@@ -28,7 +28,7 @@
  * operations:                 # REQUIRED: non-empty list of { method, path }, or the literal `all`
  *   - method: GET
  *     path: /pets
- * # operations: all          # selects every operation in the loaded catalog (expansion owned by SPEC-23)
+ * # operations: all          # selects every operation in the loaded catalog
  * baseUrl: https://api.example.com  # OPTIONAL, request base URL (overrides the spec's first servers[].url; consumed by SPEC-6)
  * auth:                       # OPTIONAL, static token/headers (env-referenceable)
  *   token: "${API_TOKEN}"
@@ -61,8 +61,8 @@ export interface OperationConfig {
  *
  * Either an explicit non-empty list of {@link OperationConfig} entries, or the
  * exact literal `"all"`. `"all"` selects every operation in the loaded spec
- * catalog; expanding it into concrete operations at run time is owned by
- * SPEC-23, so the config layer only validates and exposes the selector here.
+ * catalog; the CLI expands it into concrete operations at run time (SPEC-23),
+ * so the config layer only validates and exposes the selector here.
  */
 export type OperationsSelector = OperationConfig[] | "all";
 
@@ -115,17 +115,17 @@ export interface PayloadOverride {
 export interface Config {
   /**
    * Local OpenAPI source path(s) (JSON or YAML) to load; URLs are not fetched.
-   * Required to execute: `operations` is always non-empty, and without a spec
-   * there is no catalog to match it against, so the CLI exits `2` before
-   * running k6 or writing results (SPEC-14). Parsing still permits omission so
-   * that no-run error can be reported at the CLI boundary, alongside any
-   * SPEC-13 payload warnings.
+   * Required to execute: `operations` is always present (a non-empty list or
+   * the literal `"all"`), and without a spec there is no catalog to select from,
+   * so the CLI exits `2` before running k6 or writing results (SPEC-14).
+   * Parsing still permits omission so that no-run error can be reported at the
+   * CLI boundary, alongside any SPEC-13 payload warnings.
    */
   specs?: string[];
   /**
    * Opt-in operations: either an explicit non-empty list or the literal `"all"`.
    * The list form is never empty for a validated config. `"all"` selects every
-   * operation in the loaded catalog (expansion owned by SPEC-23).
+   * operation in the loaded catalog, expanded by the CLI (SPEC-23).
    */
   operations: OperationsSelector;
   /**

@@ -4,7 +4,13 @@ import { resolve } from "node:path";
 
 import { CliUsageError, USAGE, parseArgs, type CliOptions } from "./args.js";
 import { injectAuth } from "./auth.js";
-import { ConfigError, loadConfig, type Config, type ConfigResult } from "./config.js";
+import {
+  ConfigError,
+  loadConfig,
+  type Config,
+  type ConfigResult,
+  type OperationsSelector,
+} from "./config.js";
 import { generateAllRequestData, applyPayloadOverrides } from "./request-data.js";
 import {
   EXIT_SPECWEAVER_ERROR,
@@ -76,24 +82,56 @@ function writeUnappliedPayloadWarnings(payloads: Config["payloads"]): void {
   writeWarnings(applyPayloadOverrides([], payloads).warnings);
 }
 
-/** The result of matching configured operations against the loaded catalog. */
+/** The result of resolving the configured operation selector against the catalog. */
 interface OperationSelection {
   /** Operations present in the catalog; the ones that will be executed. */
   selected: OperationEntry[];
   /** Configured operations absent from the catalog, in config order. */
   unmatched: { method: string; path: string }[];
+  /** Non-fatal notices for cross-spec duplicates collapsed by `"all"`. */
+  duplicateWarnings: string[];
 }
 
 /**
- * Select the config's opt-in operations from the loaded spec catalog, matching
- * on method + path. Operations listed in the config but absent from the
- * spec(s) are returned as `unmatched` so the caller can warn (partial match) or
- * fail (no match at all) without losing the list.
+ * Select operations from the loaded spec catalog (SPEC-23).
+ *
+ * An explicit list is matched on method + path, preserving the SPEC-2 behaviour:
+ * entries absent from the spec(s) are returned as `unmatched` so the caller can
+ * warn (partial match) or fail (no match at all) without losing the list.
+ *
+ * The literal `"all"` selects the whole catalog: every operation from every
+ * configured spec, in spec order and within each spec in the deterministic
+ * catalog order (document path order, then canonical method order). Cross-spec
+ * duplicates on normalized `METHOD path` keep their first occurrence and report
+ * each skipped duplicate, so nothing is dropped silently. `all` never yields
+ * `unmatched` entries.
  */
 function selectOperations(
-  operations: readonly { method: string; path: string }[],
+  operations: OperationsSelector,
   specs: readonly LoadedSpec[],
 ): OperationSelection {
+  if (operations === "all") {
+    const selected: OperationEntry[] = [];
+    const duplicateWarnings: string[] = [];
+    // Key -> the source of the first occurrence, for duplicate diagnostics.
+    const firstSource = new Map<string, string>();
+    for (const spec of specs) {
+      for (const operation of spec.operations) {
+        const key = `${operation.method} ${operation.path}`;
+        const keptSource = firstSource.get(key);
+        if (keptSource !== undefined) {
+          duplicateWarnings.push(
+            `operation "${key}" is defined in both "${keptSource}" and "${spec.source}"; keeping the first occurrence and skipping the duplicate.`,
+          );
+          continue;
+        }
+        firstSource.set(key, spec.source);
+        selected.push(operation);
+      }
+    }
+    return { selected, unmatched: [], duplicateWarnings };
+  }
+
   const catalog = new Map<string, OperationEntry>();
   for (const spec of specs) {
     for (const operation of spec.operations) {
@@ -111,7 +149,7 @@ function selectOperations(
     }
     selected.push(operation);
   }
-  return { selected, unmatched };
+  return { selected, unmatched, duplicateWarnings: [] };
 }
 
 /**
@@ -152,7 +190,7 @@ async function run(options: CliOptions): Promise<number> {
   const specCount = config.specs?.length ?? 0;
   const operationsSummary =
     config.operations === "all"
-      ? "all catalog operations"
+      ? "operations = all"
       : `${config.operations.length} operation(s)`;
   process.stdout.write(
     `Loaded config: ${operationsSummary}, ${specCount} spec source(s).\n`,
@@ -190,10 +228,11 @@ async function run(options: CliOptions): Promise<number> {
   }
 
   // A spec source is required to build an operation catalog. `operations` is
-  // always non-empty, so omitting `specs` can never execute anything: fail
-  // loudly (SPEC-14, reversing SPEC-2's optional decision) instead of exiting
-  // `0` without running k6 or writing results. Payload overrides are still
-  // reported before the early return (SPEC-13).
+  // always present (a non-empty list or the literal `all`), so omitting `specs`
+  // can never execute anything: fail loudly (SPEC-14, reversing SPEC-2's
+  // optional decision) instead of exiting `0` without running k6 or writing
+  // results. Payload overrides are still reported before the early return
+  // (SPEC-13).
   if (config.specs === undefined) {
     writeUnappliedPayloadWarnings(config.payloads);
     process.stderr.write(
@@ -205,30 +244,34 @@ async function run(options: CliOptions): Promise<number> {
     return EXIT_SPECWEAVER_ERROR;
   }
 
-  // SPEC-22 only models `operations: all` in the config schema; expanding it
-  // into the loaded catalog is SPEC-23. Until that lands, reject the selector at
-  // the CLI boundary rather than coercing it into an empty explicit list.
-  if (config.operations === "all") {
-    process.stderr.write(
-      "error: `operations: all` is not supported yet; list operations explicitly in the config.\n",
-    );
-    return EXIT_SPECWEAVER_ERROR;
-  }
-
-  const { selected, unmatched } = selectOperations(
+  const { selected, unmatched, duplicateWarnings } = selectOperations(
     config.operations,
     loadedSpecs,
   );
+  // SPEC-23: duplicate operations collapsed by `all` are reported, never lost.
+  writeWarnings(duplicateWarnings);
+
   if (selected.length === 0) {
     writeUnappliedPayloadWarnings(config.payloads);
-    process.stderr.write(
-      [
-        "error: none of the configured operations were found in the loaded spec(s); nothing to execute.",
-        "Unmatched operations:",
-        ...unmatched.map(({ method, path }) => `  - ${method} ${path}`),
-        "Add the missing operations to the spec(s) or correct the `operations` entries in the config.",
-      ].join("\n") + "\n",
-    );
+    if (config.operations === "all") {
+      // `all` is driven purely by catalog membership, so an empty selection
+      // means the loaded spec(s) contributed no catalogued operations at all.
+      process.stderr.write(
+        [
+          "error: `operations: all` selected no operations: the loaded spec(s) contribute no catalogued operations; nothing to execute.",
+          "Only `paths` operations are catalogued in v1; add a spec with path operations or list `operations` explicitly in the config.",
+        ].join("\n") + "\n",
+      );
+    } else {
+      process.stderr.write(
+        [
+          "error: none of the configured operations were found in the loaded spec(s); nothing to execute.",
+          "Unmatched operations:",
+          ...unmatched.map(({ method, path }) => `  - ${method} ${path}`),
+          "Add the missing operations to the spec(s) or correct the `operations` entries in the config.",
+        ].join("\n") + "\n",
+      );
+    }
     return EXIT_SPECWEAVER_ERROR;
   }
 

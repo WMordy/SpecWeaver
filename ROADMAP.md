@@ -64,6 +64,12 @@ zero-override sample was run from the repository root with the k6 PATH-stub
 pattern from `test/cli.test.js`: it exited `0`, selected all 3 petstore
 operations, and wrote a results file.
 
+P3 (SPEC-27…32) is now planned and seeded on the board. All six P3 tickets
+are `todo`; no P3 implementation has started. P3 is about adoption and proof: a
+dependency-free POC API and examples tree, a README/AGENTS.md overhaul, and a
+real-k6 live end-to-end test in CI. It adds no new product features; see the P3
+section below.
+
 ## Work order (do not reorder without updating this file)
 
 ### P0 — correctness and trust (complete)
@@ -234,6 +240,88 @@ Dependencies (resolved):
   components-only documents. Such specs load but contribute zero operations;
   under `all` they can lead to the zero-catalog exit `2`.
 
+### P3 — adoption and live end-to-end proof (planned; not started)
+
+P3 is seeded on the board as SPEC-27…32; every ticket is `todo` and no P3
+implementation has started. The phase has two outcomes: make the shipped tool
+easy to evaluate and adopt (POC API, runnable examples, README, AGENTS.md), and
+prove the real pipeline in CI by running the built CLI with real k6 against the
+checked-in POC API. P3 adds no new product capabilities; selectors beyond `all`,
+non-JSON bodies, cookies, and auth derivation remain deferred.
+
+| Order | Key | Ticket ID | Priority | Status | Title |
+|---|---|---|---|---|---|
+| 1 | SPEC-27 | `01M5GEG4EZ82GE2M64FBSTD81R` | high | todo | Add dependency-free POC API and OpenAPI example |
+| 2 | SPEC-28 | `01M5GEG8AQP1AAN2W121ABJK1A` | high | todo | Add runnable examples for every shipped feature |
+| 3 | SPEC-29 | `01M5GEGCG9RP255MDH95M2GQE9` | urgent | todo | Add live e2e with real k6 and run it in CI |
+| 4 | SPEC-31 | `01M5GEGK03GH1BD273RKQFMX72` | medium | todo | Add concise AGENTS.md onboarding for AI coding agents |
+| 5 | SPEC-30 | `01M5GEGGEYW0ETXCEK6NT1P05E` | high | todo | Overhaul README for human adopters and AI agents |
+| 6 | SPEC-32 | `01M5GEGNR7F206V1QA3M6Y2V6Y` | low | todo | Close out P3 docs and refresh ROADMAP after delivery |
+
+Statuses are the board state at this planning refresh (2026-10-22). All six P3
+tickets are `todo`; none is `in_progress`.
+
+Dependencies:
+
+- SPEC-28 reuses SPEC-27's POC API/spec and warning config, and adds only the
+  minimum extra OpenAPI document needed for the multi-spec example.
+- SPEC-29 depends on SPEC-27 (server/spec) and SPEC-28 (runnable config), and
+  must use real k6 from `PATH` rather than a stub.
+- SPEC-31 follows SPEC-29 so it can document the exact live-e2e command.
+- SPEC-30 follows SPEC-27…29 and SPEC-31 so its AGENTS.md link resolves and it
+  documents only behavior proved by the earlier tickets.
+- SPEC-32 is last: it records verified outcomes and must not mark P3 done early.
+
+#### P3 outcome goals
+
+1. **Adoption surface.** A checked-in `examples/` tree with a dependency-free
+   POC API, its OpenAPI document, and runnable configs for zero-override,
+   explicit operations, auth, payload overrides, multi-spec/baseUrl, coverage
+   warnings, and CI usage. Every example runs from the repository root and
+   documents its expected output.
+2. **Human and agent documentation.** README restructured around the value
+   proposition, quick start, examples, recipes, limits, and AI-agent onboarding;
+   a concise `AGENTS.md` covers repo map, commands, tests, workflow, and
+   conventions without duplicating the README.
+3. **Real end-to-end proof in CI.** CI runs the built CLI with real k6 against
+   the POC API, asserts exit code `0` and a successful results JSON with
+   expected checks, and shuts the server down deterministically. The existing
+   stub-based unit coverage remains.
+
+#### P3 limitations / non-goals
+
+- No new product features. Selectors beyond `all`, non-JSON bodies, cookies,
+  `securitySchemes`-derived auth, per-operation auth, and remote specs remain
+  deferred and must be documented as such.
+- The live e2e is a functional smoke test against a local, in-memory POC API;
+  it is not a performance, capacity, or SLA test, and it must not call public
+  internet APIs.
+- The POC API is example/test infrastructure, not a supported product surface;
+  it is not hardened for production, persistence, TLS, or auth flows.
+- No Docker, k6 Cloud, npm publishing, or new CI providers are introduced.
+- P3 does not reopen P2 scope or close deferred items implicitly.
+
+#### P3 decisions recorded at planning (defaults chosen; not blocking)
+
+- POC API: Node 22 built-in `http`, in-memory deterministic data, no new
+  dependencies; listens on `127.0.0.1`, default port `8080` (override via
+  `PORT`). It implements the existing `samples/petstore.openapi.json` routes so
+  the shipped zero-override sample runs live on the default port, then extends
+  for the extra example and warning cases.
+- Live e2e lives at `e2e/live-e2e.mjs` (outside `test/` so `npm test` does not
+  run it twice), exposed as `npm run test:live-e2e` and invoked by a dedicated
+  CI step. It starts the POC server on an ephemeral port, waits for readiness,
+  runs `dist/cli.js` with `--vus 1` and a short duration, and overrides
+  `baseUrl` in a temp config; use real k6 from `PATH`, never the stub. Assert
+  exit `0`, the results JSON (`outcome`, `k6ExitCode`, per-operation checks),
+  and server-observed requests; always clean up the server and temp dirs.
+- Examples live under `examples/`; the POC API, spec, and configs (including
+  the coverage-warning config) live under `examples/poc-api/`. Existing
+  `samples/` stay valid and are referenced, not deleted.
+- `AGENTS.md` is a separate ticket (SPEC-31) and links to the README rather than
+  restating it.
+- P3 adds no new config fields or CLI flags.
+
 ## Explicit non-goals for this roadmap
 
 Scheduling/continuous runs, baseline/regression comparison, SLA thresholds,
@@ -280,3 +368,11 @@ unless the product owner reopens them. Do not create tickets for them here.
   milestone closed with no active ticket. CI run `39691033919` green on
   `0e0962e`. Remaining P2 items (selector breadth, non-JSON bodies, cookies,
   auth derivation/per-operation auth) stay deferred.
+- 2026-10-22: P3 planned and seeded on the board; SPEC-27…32 created as
+  `todo` skeletons, with no implementation started. P3 targets adoption (POC
+  API, examples, README, AGENTS.md) plus a real-k6 live e2e in CI, and adds no
+  new product features. Ticket IDs: SPEC-27 `01M5GEG4EZ82GE2M64FBSTD81R`,
+  SPEC-28 `01M5GEG8AQP1AAN2W121ABJK1A`, SPEC-29
+  `01M5GEGCG9RP255MDH95M2GQE9`, SPEC-30 `01M5GEGGEYW0ETXCEK6NT1P05E`,
+  SPEC-31 `01M5GEGK03GH1BD273RKQFMX72`, SPEC-32
+  `01M5GEGNR7F206V1QA3M6Y2V6Y`.

@@ -1,0 +1,33 @@
+# Multiple local specs with an explicit `baseUrl` (SPEC-28).
+#
+# Run from the repository root against the POC API:
+#
+#   node dist/cli.js --config examples/configs/multi-spec.baseurl.yaml \
+#     --vus 1 --duration 2s --out /tmp/specweaver-examples/multi-spec.baseurl.json
+#
+# The two `specs` are loaded in order and contribute disjoint operations:
+#
+#   - samples/petstore.openapi.json          GET/POST /pets, GET /pets/{petId}
+#   - examples/specs/second-resource.openapi.yaml  GET /owners, GET /owners/{ownerId}
+#
+# The explicit `baseUrl` pins every request to the POC API's IPv4 listener and
+# overrides the specs' own `servers[].url` values (the petstore sample uses
+# `http://localhost:8080`). Because `baseUrl` is configured, the derived
+# server-URL usability gate is bypassed by design.
+specs:
+  - samples/petstore.openapi.json
+  - examples/specs/second-resource.openapi.yaml
+
+baseUrl: http://127.0.0.1:8080
+
+operations:
+  # From samples/petstore.openapi.json.
+  - method: GET
+    path: /pets
+  - method: POST
+    path: /pets
+  # From examples/specs/second-resource.openapi.yaml.
+  - method: GET
+    path: /owners
+  - method: GET
+    path: /owners/{ownerId}

@@ -1,0 +1,37 @@
+# Global auth from environment variables (SPEC-28).
+#
+# Run from the repository root against the POC API:
+#
+#   POC_API_TOKEN=POC-TOKEN POC_API_CLIENT=examples \
+#     node dist/cli.js --config examples/configs/auth.from-env.yaml \
+#     --vus 1 --duration 2s --out /tmp/specweaver-examples/auth-from-env.json
+#
+# Both auth values are `${ENV_VAR}` references only; this file contains no
+# literal secret. SpecWeaver resolves references from the process environment at
+# config load and again at auth injection:
+#
+#   POC_API_TOKEN   Bearer token value. The POC API expects `POC-TOKEN` for
+#                   GET /admin/stats; any other value (or no token) yields 401.
+#   POC_API_CLIENT  Value for the X-Client request header, declared by the config
+#                   contract. The POC API ignores and does not log this header,
+#                   so this example does not independently assert transmission;
+#                   any non-empty value is fine.
+#
+# An unset reference is a non-fatal warning, not an error: the placeholder is
+# sent literally, the run still exits 0, and each unresolved variable produces
+# one `warning:` line on stderr (de-duplicated across fields).
+specs:
+  - examples/poc-api/openapi.yaml
+
+operations:
+  - method: GET
+    path: /health
+  - method: GET
+    path: /owners
+  - method: GET
+    path: /admin/stats
+
+auth:
+  token: "${POC_API_TOKEN}"
+  headers:
+    X-Client: "${POC_API_CLIENT}"

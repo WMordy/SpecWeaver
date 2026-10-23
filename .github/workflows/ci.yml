@@ -36,3 +36,7 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      - name: Run live k6 end-to-end test
+        run: npm run test:live-e2e
+        timeout-minutes: 5

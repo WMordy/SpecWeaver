@@ -1,0 +1,44 @@
+# Canonical happy-path SpecWeaver config for the POC API (SPEC-27).
+#
+# Run from the repository root against a locally running POC server
+# (node examples/poc-api/server.js):
+#
+#   node dist/cli.js --config examples/poc-api/specweaver.config.yaml --vus 1 --duration 2s
+#
+# It selects the six non-warning operations explicitly, injects the shared
+# static bearer token, and replaces the POST /pets generated body with a known
+# payload. The three warning-triggering operations (GET /admin/stats,
+# GET /recommendations, POST /pets/{petId}/photo) are intentionally excluded;
+# see specweaver.warnings.config.yaml for those.
+#
+# `baseUrl` is intentionally omitted: requests fall back to the OpenAPI
+# document's absolute `servers[].url` (http://127.0.0.1:8080).
+specs:
+  - examples/poc-api/openapi.yaml
+
+operations:
+  - method: GET
+    path: /health
+  - method: GET
+    path: /pets
+  - method: POST
+    path: /pets
+  - method: GET
+    path: /pets/{petId}
+  - method: GET
+    path: /owners
+  - method: GET
+    path: /owners/{ownerId}
+
+auth:
+  token: POC-TOKEN
+
+# Whole-value body replacement for POST /pets. This differs from the spec's
+# example/default/faker values so a run visibly proves the override applied.
+payloads:
+  - method: POST
+    path: /pets
+    body:
+      name: PocOverridePet
+      tag: override
+      age: 4

@@ -374,9 +374,10 @@ Every shipped feature has at least one runnable example.
 
 This snippet is copy-pasteable from the repository root. It builds, starts the
 POC API, runs one example with real k6, fails on any failed check, asserts the
-results JSON, and always cleans up its server, logs, and temp files. It does
-**not** add or modify a workflow file; the dedicated live e2e workflow is
-deferred to SPEC-29.
+results JSON, and always cleans up its server, logs, and temp files. The
+repository's own workflow, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml),
+runs the dedicated live e2e as a separate step after `npm test`; this snippet is
+the copy-pasteable equivalent for other CI systems.
 
 ```sh
 set -euo pipefail

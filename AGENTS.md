@@ -4,11 +4,11 @@ SpecWeaver is a Node/TypeScript CLI that turns OpenAPI 3.0/3.1 definitions plus 
 YAML config into dependency-free k6 load tests, runs them, and writes a results
 JSON.
 
-**Current phase:** P0 (correctness/trust), P1 (proof), and P2 (zero-override) are
-done. P3 (adoption + real-k6 live proof) is in progress. Phase status, work
-order, and limitations live in [ROADMAP.md](ROADMAP.md) — do not duplicate them
-here. The Kanban board is the source of truth for ticket status; ROADMAP tables
-can lag it.
+**Current phase:** P0 (correctness/trust), P1 (proof), P2 (zero-override), and
+P3 (adoption + real-k6 live proof) are done and committed. Phase status, work
+order, and limitations live
+in [ROADMAP.md](ROADMAP.md) — do not duplicate them here. The Kanban board is
+the source of truth for ticket status; ROADMAP tables can lag it.
 
 ## Repo map
 
@@ -84,7 +84,8 @@ k6 rules:
 - Diagnostics: warnings are `warning:`-prefixed on stderr and never change exit
   status; errors are `error:` on stderr. Never print resolved secrets/tokens.
 - Exit codes: `0` success; `1` k6 failure or the `--fail-on-check-failure` gate;
-  `2` SpecWeaver/config/spec/preflight/internal error (k6 not run).
+  `2` SpecWeaver/config/spec/preflight/internal error. Most exit-`2` errors occur
+  before k6 runs; a post-run results-file write failure also exits `2` after k6.
 - Config: YAML only, `--config` only. `operations` is required; `specs` is
   optional at the schema level but required to execute (missing `specs` exits `2`
   before k6). `specs` are local files only. Coverage gaps warn, not fail.

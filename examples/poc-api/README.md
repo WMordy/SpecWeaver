@@ -1,8 +1,8 @@
 # POC API for SpecWeaver examples
 
 A small, deterministic, **dependency-free** HTTP API intended for the
-repository's SpecWeaver examples and the planned live end-to-end test. It starts
-with one Node command and needs no `npm install` for the POC itself.
+repository's SpecWeaver examples and the live end-to-end test. It starts with one
+Node command and needs no `npm install` for the POC itself.
 
 > **This is example/test infrastructure, not a production service.** It has no
 > persistence (all mutations reset on restart), TLS, rate limiting, auth flows,

@@ -997,6 +997,69 @@ test("built CLI accepts a valid absolute servers URL with substituted variable d
   assert.equal(data.baseUrl, "https://api.example.com/api");
 });
 
+test("built CLI skips unusable servers entries and uses the first usable fallback", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writeServersSpec(dir, "openapi.json", [
+    { url: "/v1" },
+    { url: "" },
+    { url: "ftp://example.com" },
+    { url: "https://api.example.com/v1" },
+    { url: "https://later.example.com" },
+  ]);
+  const run = runSandboxed(
+    dir,
+    `specs:\n  - ${specPath}\noperations: all\n`,
+    { keepTemp: true },
+  );
+
+  assert.equal(run.result.status, EXIT_SUCCESS, run.result.stderr);
+  assert.equal(existsSync(run.k6Marker), true, "k6 should have been invoked");
+  assert.equal(existsSync(run.resultsPath), true);
+  const warnings =
+    run.result.stderr.match(/^warning: skipping unusable .*$/gm) ?? [];
+  assert.equal(warnings.length, 3, run.result.stderr);
+  assert.match(warnings[0], /"\/v1".*it is not an absolute URL\./);
+  assert.match(warnings[1], /"".*it is empty\./);
+  assert.match(
+    warnings[2],
+    /"ftp:\/\/example\.com".*it does not use the http or https protocol\./,
+  );
+  assert.doesNotMatch(run.result.stderr, /is not usable/);
+
+  const generated = run.result.stdout.match(/^Generated k6 script: (.+)$/m);
+  assert.ok(generated, `expected a generated-script path:\n${run.result.stdout}`);
+  const dataPath = join(
+    dirname(generated[1].trim()),
+    "specweaver.data.json",
+  );
+  const data = JSON.parse(readFileSync(dataPath, "utf8"));
+  assert.equal(data.baseUrl, "https://api.example.com/v1");
+  assert.equal(
+    data.operations[0].url,
+    "https://api.example.com/v1/pets",
+  );
+});
+
+test("built CLI redacts skipped fallback values in warnings", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writeServersSpec(dir, "openapi.json", [
+    { url: "/v1?access_token=SUPERSECRET" },
+    { url: "https://api.example.com/v1" },
+  ]);
+  const run = runSandboxed(
+    dir,
+    `specs:\n  - ${specPath}\noperations: all\n`,
+    { keepTemp: true },
+  );
+
+  assert.equal(run.result.status, EXIT_SUCCESS, run.result.stderr);
+  assert.match(
+    run.result.stderr,
+    /warning: skipping unusable `servers\[\]\.url` ".*redacted.*"/,
+  );
+  assert.doesNotMatch(run.result.stderr, /SUPERSECRET|access_token/);
+});
+
 test("built CLI applies the base-URL gate to explicit operation lists too", () => {
   const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
   const specPath = writeServersSpec(dir, "openapi.json", [{ url: "/v1" }]);

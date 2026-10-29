@@ -29,7 +29,7 @@
  *   - method: GET
  *     path: /pets
  * # operations: all          # selects every operation in the loaded catalog
- * baseUrl: https://api.example.com  # OPTIONAL, request base URL (overrides the spec's first servers[].url; consumed by SPEC-6)
+ * baseUrl: https://api.example.com  # OPTIONAL, request base URL (overrides the spec's first usable servers[].url; consumed by SPEC-6)
  * auth:                       # OPTIONAL, static token/headers (env-referenceable)
  *   token: "${API_TOKEN}"
  *   headers:

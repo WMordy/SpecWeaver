@@ -53,7 +53,7 @@ available in v1 and link to the matching limitation in
 | Derived request data | Shipped | Path/query/header parameters and JSON bodies; explicit example/examples → `default` → faker; required and optional fields generated. |
 | Whole-body `payloads` overrides | Shipped | Replaces the generated JSON body for the matching operation. |
 | Global static auth | Shipped | Bearer `token` and/or static `headers`; `${ENV_VAR}` references; never derived from `security`. |
-| Base URL resolution | Shipped | Explicit `baseUrl` wins; otherwise the first string `servers[].url`, with server-variable defaults substituted. |
+| Base URL resolution | Shipped | Explicit `baseUrl` wins; otherwise the first usable `servers[].url`, with server-variable defaults substituted and unusable entries skipped with a warning. |
 | Non-fatal coverage warnings | Shipped | Non-JSON required body, cookie parameters, security without configured auth. |
 | Dependency-free k6 script emission | Shipped | k6 built-ins and plain JavaScript only. |
 | Real k6 execution and streaming output | Shipped | k6 must be on `PATH`; SpecWeaver never installs it. |
@@ -195,7 +195,7 @@ operations:                 # REQUIRED: list of { method, path }, or the literal
   - method: GET
     path: /pets
 # operations: all           # alternative: select every catalogued operation
-baseUrl: https://staging.example.com  # OPTIONAL: overrides the first servers[].url
+baseUrl: https://staging.example.com  # OPTIONAL: overrides the servers[].url fallback
 auth:                       # OPTIONAL: static token/headers (env-referenceable)
   token: "${API_TOKEN}"
   headers:
@@ -285,21 +285,24 @@ whitespace-only, or non-string value; a valid value is otherwise trusted
 stripped when request URLs are composed, so `https://host/` + `/pets` yields
 `https://host/pets`.
 
-Without an explicit `baseUrl`, the request base URL is the **first string**
-`servers[].url` across the configured specs, in `specs` order, with
-server-variable defaults substituted (for example `https://{region}.example.com`
-with `region.default: eu`). Only that first entry is considered; a later
-absolute `servers[]` entry is not a fallback.
+Without an explicit `baseUrl`, the request base URL is the **first usable**
+`servers[].url` across the configured specs, in `specs` order and then
+`servers[]` document order, with server-variable defaults substituted (for
+example `https://{region}.example.com` with `region.default: eu`). Entries that
+are relative, empty, non-`http(s)`, whitespace-bearing, or still templated
+(unresolved `{variable}`) are skipped, so an unusable earlier entry does not
+block a usable later one. Each skipped entry emits a non-fatal `warning:` on
+stderr naming its spec source and a redacted value; the run continues with the
+first usable entry. Warnings never change the exit code.
 
 If no usable fallback exists, the run fails at the SpecWeaver boundary instead
-of emitting a broken relative URL. A missing, empty, relative, non-`http(s)`,
-whitespace-bearing, or still-templated (unresolved `{variable}`) value exits `2`
-with one actionable `error:` naming the spec source and the offending value (or
-stating that none exists), plus both remedies: set `baseUrl`, or add an absolute
-`http(s)` `servers[].url`. This happens before the k6 preflight, before any
-script is generated, and before a results file is written. The gate is
-selector-independent: it applies to explicit-list and `all` runs alike.
-Base-URL diagnostics redact values that may contain credentials.
+of emitting a broken relative URL. The diagnostic names the first string
+candidate (or states that no string value exists) with one actionable `error:`,
+plus both remedies: set `baseUrl`, or add an absolute `http(s)` `servers[].url`.
+This happens before the k6 preflight, before any script is generated, and
+before a results file is written. The gate is selector-independent: it applies
+to explicit-list and `all` runs alike. Base-URL diagnostics redact values that
+may contain credentials.
 
 ### Auth
 
@@ -610,8 +613,11 @@ means **not available**, not partially supported:
 - **OpenAPI 3.1 `webhooks` are not catalogued**, and neither are
   components-only documents. Such specs load but contribute zero operations;
   under `all` they can lead to the zero-catalog exit `2`.
-- **The base URL uses only the first string fallback entry.** Without an
-  explicit `baseUrl`, a later absolute `servers[]` entry is not a fallback.
+- **Unusable `servers[]` entries are skipped with a warning.** Without an
+  explicit `baseUrl`, the fallback uses the first usable entry and warns on
+  stderr for each distinct entry skipped before it. When none is usable, the run
+  exits `2` and the diagnostic names the first string candidate; no skip warnings
+  are emitted on that error path.
 - **An explicit `baseUrl` is trusted verbatim** once it is a non-empty string;
   it bypasses the server-URL usability gate.
 - **Warnings are warn-only.** Auth gaps, cookies, and non-JSON bodies are
@@ -636,11 +642,13 @@ Install k6 and confirm `k6 version` works in the same shell.
 
 ### Base-URL gate error (exit `2`)
 
-If the config has no `baseUrl` and the first `servers[].url` is missing, empty,
-relative, non-`http(s)`, whitespace-bearing, or still templated, the run exits
-`2` before k6 and writes no results. Fix it in one of two ways: add
-`baseUrl: https://host` to the config, or give the spec an absolute `http(s)`
-`servers[].url`. Only the first string entry is considered.
+If the config has no `baseUrl` and no `servers[].url` is usable (all are
+missing, empty, relative, non-`http(s)`, whitespace-bearing, or still templated),
+the run exits `2` before k6 and writes no results. Entries are scanned in order;
+when a usable entry exists, each skipped one emits a `warning:` on stderr. On the
+all-unusable path the diagnostic names the first string candidate when one
+exists. Fix it in one of two ways: add `baseUrl: https://host` to the config, or
+give the spec an absolute `http(s)` `servers[].url`.
 
 ### `localhost` resolves to IPv6 only
 

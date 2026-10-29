@@ -402,14 +402,20 @@ async function run(options: CliOptions): Promise<number> {
   writeWarnings(buildCoverageWarnings(selected, coverageAuthHeaders));
 
   // SPEC-24 base-URL usability gate (A1-A5). Without an explicit `baseUrl`, the
-  // request base URL is derived from the first `servers[].url`. A missing,
-  // empty, relative, non-http(s), or still-templated value would make k6 reject
-  // the emitted URL after starting, so fail here — after selection succeeded
-  // and before k6 preflight/generation/emission — with one actionable message.
-  // The gate is selector-independent; an explicit `baseUrl` is trusted verbatim
-  // and bypasses it (A2), preserving `resolveBaseUrl`'s precedence.
+  // request base URL is the first usable `servers[].url` (SPEC-33): entries that
+  // are missing, empty, relative, non-http(s), whitespace-bearing, or still
+  // templated are skipped, so an unusable earlier entry cannot block a usable
+  // later one. Each skipped entry is reported as a non-fatal `warning:` so the
+  // retargeting is visible; if no entry is usable, the gate reports the first
+  // string candidate (no skip warnings) because k6 would reject the emitted URL
+  // after starting. Fail here — after selection succeeded and before k6
+  // preflight/generation/emission — with one actionable message. The gate is
+  // selector-independent; an explicit `baseUrl` is trusted verbatim and bypasses
+  // it (A2), preserving `resolveBaseUrl`'s precedence.
   if (config.baseUrl === undefined) {
-    const fallback = resolveFallbackBaseUrl(loadedSpecs);
+    const baseUrlWarnings: string[] = [];
+    const fallback = resolveFallbackBaseUrl(loadedSpecs, baseUrlWarnings);
+    writeWarnings(baseUrlWarnings);
     const problem = classifyBaseUrl(fallback?.url);
     if (problem !== undefined) {
       process.stderr.write(

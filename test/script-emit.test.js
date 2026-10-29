@@ -48,8 +48,8 @@ function request(overrides = {}) {
 }
 
 /** Wrap an OpenAPI document in the minimal SPEC-3 `LoadedSpec` shape. */
-function spec(document) {
-  return { source: "spec", document, operations: [] };
+function spec(document, source = "spec") {
+  return { source, document, operations: [] };
 }
 
 /** Build a resolved config with a default load profile. */
@@ -394,7 +394,7 @@ test("config baseUrl override wins over the spec's servers[].url", () => {
   assert.equal(data.operations[0].url, "https://override.example.com/pets");
 });
 
-test("falls back to the spec's first servers[].url with variable defaults", () => {
+test("falls back to the spec's first usable servers[].url with variable defaults", () => {
   const specs = [
     spec(
       document([
@@ -660,12 +660,14 @@ test("resolveFallbackBaseUrl substitutes variable defaults and yields a usable U
     ),
   ];
 
-  const fallback = resolveFallbackBaseUrl(specs);
+  const warnings = [];
+  const fallback = resolveFallbackBaseUrl(specs, warnings);
   assert.deepEqual(fallback, {
     url: "https://api.example.com/api",
     source: "spec",
   });
   assert.equal(classifyBaseUrl(fallback.url), undefined);
+  assert.deepEqual(warnings, []);
 });
 
 test("resolveFallbackBaseUrl leaves a variable without a default unresolved", () => {
@@ -685,19 +687,143 @@ test("resolveFallbackBaseUrl leaves a variable without a default unresolved", ()
   assert.equal(classifyBaseUrl(fallback.url), "unresolved-variable");
 });
 
-test("resolveFallbackBaseUrl preserves first-server-entry precedence (A3)", () => {
+test("resolveFallbackBaseUrl skips unusable servers entries and picks the first usable one", () => {
   const specs = [
     spec(
       document([
         { url: "/v1" },
+        { url: "" },
+        { url: " https://whitespace.example.com " },
+        { url: "ftp://example.com" },
+        { url: "https://{host}/api" },
+        {
+          url: "https://{host}/api",
+          variables: { host: { default: "usable.example.com" } },
+        },
         { url: "https://later.example.com" },
       ]),
     ),
   ];
 
-  const fallback = resolveFallbackBaseUrl(specs);
-  assert.equal(fallback.url, "/v1");
+  const warnings = [];
+  const fallback = resolveFallbackBaseUrl(specs, warnings);
+  assert.deepEqual(fallback, {
+    url: "https://usable.example.com/api",
+    source: "spec",
+  });
+  assert.equal(classifyBaseUrl(fallback.url), undefined);
+  assert.equal(warnings.length, 5);
+  assert.match(
+    warnings[0],
+    /^skipping unusable `servers\[\]\.url` "\/v1" from spec "spec": it is not an absolute URL\.$/,
+  );
+  assert.match(
+    warnings[1],
+    /^skipping unusable `servers\[\]\.url` "" from spec "spec": it is empty\.$/,
+  );
+  assert.match(
+    warnings[2],
+    /^skipping unusable `servers\[\]\.url` ".*redacted.*" from spec "spec": it has surrounding whitespace\.$/,
+  );
+  assert.match(
+    warnings[3],
+    /^skipping unusable `servers\[\]\.url` "ftp:\/\/example\.com" from spec "spec": it does not use the http or https protocol\.$/,
+  );
+  assert.match(
+    warnings[4],
+    /^skipping unusable `servers\[\]\.url` "https:\/\/\{host\}\/api" from spec "spec": it still contains an unresolved server-variable placeholder\.$/,
+  );
+});
+
+test("resolveFallbackBaseUrl scans specs in order and skips unusable specs", () => {
+  const specs = [
+    spec(document([{ url: "/v1" }]), "first.json"),
+    spec(document([{ url: "ftp://example.com" }]), "second.json"),
+    spec(document([{ url: "https://third.example.com" }]), "third.json"),
+  ];
+
+  const warnings = [];
+  assert.deepEqual(resolveFallbackBaseUrl(specs, warnings), {
+    url: "https://third.example.com",
+    source: "third.json",
+  });
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0], /from spec "first\.json": it is not an absolute URL\.$/);
+  assert.match(
+    warnings[1],
+    /from spec "second\.json": it does not use the http or https protocol\.$/,
+  );
+});
+
+test("resolveFallbackBaseUrl returns the first string candidate when none is usable", () => {
+  const specs = [
+    spec(
+      document([{ url: "/v1" }, { url: "ftp://example.com" }]),
+      "first.json",
+    ),
+  ];
+
+  const warnings = [];
+  const fallback = resolveFallbackBaseUrl(specs, warnings);
+  assert.deepEqual(fallback, { url: "/v1", source: "first.json" });
   assert.equal(classifyBaseUrl(fallback.url), "relative");
+  assert.deepEqual(warnings, []);
+});
+
+test("resolveFallbackBaseUrl redacts skipped values that may contain credentials", () => {
+  const specs = [
+    spec(
+      document([
+        { url: "/v1?access_token=SUPERSECRET" },
+        { url: "https://ok.example.com" },
+      ]),
+      "openapi.json",
+    ),
+  ];
+
+  const warnings = [];
+  const fallback = resolveFallbackBaseUrl(specs, warnings);
+  assert.deepEqual(fallback, {
+    url: "https://ok.example.com",
+    source: "openapi.json",
+  });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /redacted/);
+  assert.doesNotMatch(warnings[0], /SUPERSECRET|access_token/);
+});
+
+test("resolveFallbackBaseUrl skips non-string entries and returns undefined when no string exists", () => {
+  assert.equal(
+    resolveFallbackBaseUrl([spec(document([{ url: 42 }, {}]))]),
+    undefined,
+  );
+  assert.deepEqual(
+    resolveFallbackBaseUrl([
+      spec(document([{ url: 42 }, { url: "https://ok.example.com" }])),
+    ]),
+    { url: "https://ok.example.com", source: "spec" },
+  );
+});
+
+test("resolveBaseUrl and emitted data use a later usable fallback entry", () => {
+  const specs = [
+    spec(
+      document([{ url: "/v1" }, { url: "https://api.example.com/v1" }]),
+    ),
+  ];
+
+  assert.equal(
+    resolveBaseUrl({ config: config(), specs }),
+    "https://api.example.com/v1",
+  );
+
+  const { data } = emitScript({
+    config: config(),
+    specs,
+    requests: [request({ path: "/pets" })],
+  });
+  assert.equal(data.baseUrl, "https://api.example.com/v1");
+  assert.equal(data.operations[0].url, "https://api.example.com/v1/pets");
 });
 
 // --- Determinism -----------------------------------------------------------

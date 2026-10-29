@@ -9,10 +9,11 @@
 
 # OpenAPI source(s) to load. Local file paths only (URLs are not fetched).
 # Required to execute; string or list of strings.
-# Requests default to the first string `servers[].url` across the specs. Add an
-# optional `baseUrl:` (see the README) to point the generated tests at a
-# different host without editing the spec. Without a `baseUrl`, that fallback
-# must be an absolute http(s) URL or the run exits 2 before k6.
+# Requests default to the first usable `servers[].url` across the specs
+# (unusable entries are skipped with a warning). Add an optional `baseUrl:` (see
+# the README) to point the generated tests at a different host without editing
+# the spec. Without a `baseUrl`, that fallback must be an absolute http(s) URL or
+# the run exits 2 before k6.
 specs:
   - samples/petstore.openapi.json
 

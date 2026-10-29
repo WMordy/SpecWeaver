@@ -122,7 +122,8 @@ k6 rules:
 - Never log resolved secrets; diagnostics redact them.
 - Warnings go to stderr (`warning:`), never to stdout or the results JSON.
 - Zero-override runs still need a usable base URL: an explicit `baseUrl` or an
-  absolute first `servers[].url`, otherwise the run exits `2`.
+  absolute `servers[].url` (unusable entries are skipped with a warning),
+  otherwise the run exits `2`.
 - `specs` are local files only; remote `http(s)` URLs are not fetched.
 - Deferred (not shipped): selectors beyond `all` (`operationId`, tags,
   wildcards), non-JSON bodies, cookies, `securitySchemes`-derived auth,

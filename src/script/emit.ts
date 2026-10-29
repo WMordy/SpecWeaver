@@ -19,11 +19,11 @@
  * ## Locked decisions implemented here
  *
  * - **A1 / Base URL:** the request base URL is the config `baseUrl` override
- *   when present, otherwise the spec's first `servers[].url` (server-variable
- *   defaults substituted). The optional `baseUrl` field now exists on the
- *   SPEC-2 `Config` (its validation was absorbed into SPEC-9 from the closed
- *   SPEC-10, 2026-10-18); this module only *consumes* it, applying the
- *   precedence above without re-validating the field.
+ *   when present, otherwise the first usable `servers[].url` (server-variable
+ *   defaults substituted; unusable entries are skipped). The optional `baseUrl`
+ *   field now exists on the SPEC-2 `Config` (its validation was absorbed into
+ *   SPEC-9 from the closed SPEC-10, 2026-10-18); this module only *consumes* it,
+ *   applying the precedence above without re-validating the field.
  * - **A2 / Output location:** the script is `specweaver.generated.js` and its
  *   data is `specweaver.data.json`, written together in a unique per-run
  *   directory under `os.tmpdir()` created with
@@ -145,7 +145,7 @@ export interface EmitInput {
   config: Config;
   /**
    * The SPEC-3 spec/catalog source(s), in order. Used for the fallback base URL
-   * (the first `servers[].url`) and for each operation's documented 2xx
+   * (the first usable `servers[].url`) and for each operation's documented 2xx
    * response(s). Optional; when absent, base URL comes from `config.baseUrl`
    * only and every check defaults to {@link DEFAULT_EXPECTED_STATUS}.
    */
@@ -261,23 +261,42 @@ function serverUrl(server: unknown): string | undefined {
 
 /** A resolved fallback `servers[].url` plus the spec source that supplied it. */
 export interface FallbackBaseUrl {
-  /** The first `servers[].url` across the specs, variable defaults applied. */
+  /**
+   * The first usable `servers[].url` across the specs, variable defaults
+   * applied. When no candidate is usable, this is the first string candidate
+   * so the CLI can diagnose why the fallback failed.
+   */
   url: string;
   /** The spec source that supplied {@link url}, when the spec carries one. */
   source?: string;
 }
 
 /**
- * Resolve the fallback base URL (A1): the first `servers[].url` across the
- * specs, in spec order, with server-variable defaults substituted.
+ * Resolve the fallback base URL (A1): the first usable `servers[].url` across
+ * the specs, in spec order, with server-variable defaults substituted.
  *
- * Entries whose `url` is not a string are skipped, preserving the existing
- * first-entry behaviour. The picked entry is returned with its source so the
- * CLI can produce an actionable diagnostic.
+ * "Usable" is exactly {@link classifyBaseUrl}'s contract: absolute `http(s)`,
+ * non-empty host, no whitespace/control characters, and no unresolved
+ * `{variable}` placeholder. Entries whose `url` is not a string are skipped.
+ * Scanning continues past unusable entries, so an earlier relative, empty,
+ * non-`http(s)`, whitespace-bearing, or templated entry cannot block a later
+ * usable one.
+ *
+ * When a usable entry is found, every skipped string entry is reported through
+ * `warnings` (unprefixed; the CLI adds `warning:` and writes to stderr) so the
+ * retargeting is visible. Values are redacted with
+ * {@link redactBaseUrlForDiagnostics}. If no candidate is usable, the first
+ * string candidate is returned with no skip warnings so the CLI can keep
+ * producing its existing actionable error; the picked entry is returned with
+ * its source so the diagnostic can name the right spec.
  */
 export function resolveFallbackBaseUrl(
   specs: readonly EmitSpec[],
+  warnings?: string[],
 ): FallbackBaseUrl | undefined {
+  let firstCandidate: FallbackBaseUrl | undefined;
+  const skipped: string[] = [];
+
   for (const spec of specs) {
     const servers = spec.document.servers;
     if (!Array.isArray(servers)) {
@@ -285,12 +304,60 @@ export function resolveFallbackBaseUrl(
     }
     for (const server of servers) {
       const url = serverUrl(server);
-      if (url !== undefined) {
-        return spec.source === undefined ? { url } : { url, source: spec.source };
+      if (url === undefined) {
+        continue;
       }
+      const candidate: FallbackBaseUrl =
+        spec.source === undefined ? { url } : { url, source: spec.source };
+      const problem = classifyBaseUrl(url);
+      if (problem === undefined) {
+        if (warnings !== undefined && skipped.length > 0) {
+          warnings.push(...skipped);
+        }
+        return candidate;
+      }
+      if (firstCandidate === undefined) {
+        firstCandidate = candidate;
+      }
+      skipped.push(formatSkippedFallbackWarning(url, spec.source, problem));
     }
   }
-  return undefined;
+
+  return firstCandidate;
+}
+
+/** Human-readable reason for a rejected fallback candidate. */
+function fallbackProblemReason(problem: BaseUrlProblem): string {
+  switch (problem) {
+    case "missing":
+      return "no string value is defined";
+    case "empty":
+      return "it is empty";
+    case "surrounding-whitespace":
+      return "it has surrounding whitespace";
+    case "embedded-whitespace":
+      return "it contains embedded whitespace or control characters";
+    case "relative":
+      return "it is not an absolute URL";
+    case "unsupported-protocol":
+      return "it does not use the http or https protocol";
+    case "missing-host":
+      return "it has no host";
+    case "unresolved-variable":
+      return "it still contains an unresolved server-variable placeholder";
+  }
+}
+
+/** Build a non-fatal warning for one skipped fallback candidate. */
+function formatSkippedFallbackWarning(
+  url: string,
+  source: string | undefined,
+  problem: BaseUrlProblem,
+): string {
+  const origin =
+    source === undefined ? "the loaded specs" : `spec "${source}"`;
+  const value = JSON.stringify(redactBaseUrlForDiagnostics(url));
+  return `skipping unusable \`servers[].url\` ${value} from ${origin}: ${fallbackProblemReason(problem)}.`;
 }
 
 /**
@@ -510,7 +577,7 @@ export function classifyBaseUrl(
 
 /**
  * Resolve the request base URL (A1): the config `baseUrl` override wins, else
- * the spec's first `servers[].url` (server-variable defaults substituted), else
+ * the first usable `servers[].url` (server-variable defaults substituted), else
  * the empty string.
  *
  * This pure behaviour is unchanged by the SPEC-24 CLI usability gate, which

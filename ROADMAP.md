@@ -9,8 +9,14 @@ priorities change; the Kanban board remains the source of truth for ticket statu
 
 ## Where we are
 
-SPEC-1 through SPEC-32 are `done`; P3 (adoption and live end-to-end proof) is
+SPEC-1 through SPEC-33 are `done`; P3 (adoption and live end-to-end proof) is
 complete and committed. The P2 zero-override milestone remains complete.
+
+P4 (SPEC-33…41) covers the capabilities deferred by P2/P3: base-URL fallback
+breadth, `label`/`matrix` path styles, cookies, selectors beyond `all`, OpenAPI
+3.1 `webhooks`, non-JSON bodies, `securitySchemes`-derived and per-operation
+auth, and remote specs. SPEC-33 is done; the remaining eight are `todo`
+skeletons. No other P4 implementation has started.
 
 P0 (correctness and trust) and P1 (proof it works) are both closed and
 committed on `master`. The P0 commits are:
@@ -245,11 +251,11 @@ Dependencies (resolved):
   value. An operation with non-empty `security` and no configured auth runs
   without authentication and warns; there is no `securitySchemes` mapping and no
   per-operation auth.
-- **Base URL uses only the first string fallback entry.** Without an explicit
-  `baseUrl`, resolution takes the first string `servers[].url` across the specs
-  in `specs` order (server-variable defaults substituted). A later absolute
-  entry is not a fallback, so a relative first entry fails even when a later
-  entry would be usable.
+- **Base URL used only the first string fallback entry (fixed by SPEC-33).**
+  P2 resolution took the first string `servers[].url` across the specs in `specs`
+  order (server-variable defaults substituted), so a relative first entry failed
+  even when a later entry was usable. SPEC-33 now uses the first usable entry
+  and warns on stderr for each skipped one.
 - **Explicit `baseUrl` is trusted verbatim.** It must be a non-empty string
   (config validation rejects an empty, whitespace-only, or non-string value);
   otherwise it is used
@@ -382,6 +388,53 @@ Claim → evidence → result:
   restating it.
 - P3 adds no new config fields or CLI flags.
 
+### P4 — deferred capability expansion (in progress)
+
+P4 is in progress. Nine skeleton tickets were seeded on 2026-10-24 from a
+roadmap-vs-implementation gap review. SPEC-33 is done; the remaining eight are
+`todo` and await planner elaboration. The order below is the work order; do not
+reorder it without updating this file. Each ticket must be planned before
+implementation, and docs must describe shipped behavior only.
+
+| Order | Key | Ticket ID | Priority | Status | Title |
+|---|---|---|---|---|---|
+| 1 | SPEC-33 | `01M5QTK2DF4M4R8BTX6RV905FS` | medium | done | Accept the first usable `servers[]` URL as the base-URL fallback |
+| 2 | SPEC-34 | `01M5QTK52K557BCDRTKWV0N6PS` | low | todo | Implement `label` and `matrix` path parameter styles |
+| 3 | SPEC-35 | `01M5QTK8711DW0S5BFN0M78R1D` | medium | todo | Generate and send cookie parameters |
+| 4 | SPEC-36 | `01M5QTKB3GR8JAST4FF8Q35VQN` | high | todo | Support operation selectors beyond the `all` literal |
+| 5 | SPEC-37 | `01M5QTKE0SXC7BY1KX6WTCQGRT` | medium | todo | Catalogue OpenAPI 3.1 `webhooks` |
+| 6 | SPEC-38 | `01M5QTKGSG573T640BKBVJJ8Q5` | high | todo | Generate non-JSON request bodies |
+| 7 | SPEC-39 | `01M5QTKKJBDDMR0AJV6ENT8661` | high | todo | Derive global auth from `securitySchemes` |
+| 8 | SPEC-40 | `01M5QTKPE005PRTKMFG1DGEFSX` | medium | todo | Add per-operation auth overrides |
+| 9 | SPEC-41 | `01M5QTKSARFS9P8RXMTS9BB2AW` | medium | todo | Fetch remote `http(s)` specs |
+
+Dependencies and sequencing:
+
+- SPEC-33…38 are independent slices and may be planned in work order.
+- SPEC-39 establishes the shared auth model; SPEC-40 depends on it and cannot be
+  implemented first.
+- SPEC-41 is last: remote fetching adds network egress, timeouts, redirects, and
+  an SSRF surface that must be scoped before implementation.
+
+Decisions and resolved behavior:
+
+- SPEC-33 (done) changes which host a zero-override run targets when an unusable
+  `servers[]` entry precedes a usable one; each skipped entry now warns on stderr
+  (redacted), and the existing exit-`2` diagnostic remains when no entry is
+  usable.
+- SPEC-37 must define how a webhook operation is exercised (there is no inbound
+  request path to call).
+- SPEC-38 must define multipart/file-body representation without adding runtime
+  dependencies.
+- SPEC-39/40 must preserve explicit-config precedence and secret redaction;
+  unsupported schemes stay warn-only.
+- SPEC-41 must define an explicit timeout/redirect/SSRF policy before fetching.
+
+Guardrails: no new dependencies without approval, emitted k6 scripts stay
+dependency-free, warnings remain non-fatal, secrets are never logged, and the
+roadmap is updated at phase close; per-ticket updates are limited to status and
+marking limitations fixed.
+
 ## Explicit non-goals for this roadmap
 
 Scheduling/continuous runs, baseline/regression comparison, SLA thresholds,
@@ -449,3 +502,15 @@ unless the product owner reopens them. Do not create tickets for them here.
   are complete. Final roadmap statuses flipped to `done`/complete, and the
   AGENTS.md exit-`2` wording was aligned with the README's post-k6
   results-write exception.
+- 2026-10-24: P4 planned from a roadmap-vs-implementation gap review. SPEC-33…41
+  created as `todo` skeletons covering deferred base-URL fallback breadth,
+  `label`/`matrix` path styles, cookies, selectors beyond `all`, 3.1
+  `webhooks`, non-JSON bodies, `securitySchemes`-derived auth, per-operation
+  auth, and remote specs. No implementation started; SPEC-33 is first in work
+  order and awaits planning.
+- 2026-10-29: SPEC-33 done: the fallback now uses the first usable
+  `servers[].url` and warns on stderr for each distinct skipped entry, with the
+  existing exit-`2` diagnostic preserved when none is usable. The P2 base-URL
+  limitation is annotated as fixed. `npm run build` clean; `npm test` 305/305
+  passing; reviewer passed. P4 remains open; the other eight tickets are
+  untouched.

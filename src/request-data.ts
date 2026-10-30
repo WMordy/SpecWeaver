@@ -18,10 +18,12 @@
  * every nested object and array.
  *
  * Parameter values are serialized to their OpenAPI wire form using the
- * default `style`/`explode` for each location (query: `form`/`explode=true`;
- * path & header: `simple`/`explode=false`), overridable per parameter. Array
- * and object query parameters therefore expand into repeated / per-property
- * entries rather than being JSON-encoded.
+ * effective `style`/`explode` for each location (query: `form`/`explode=true`;
+ * path & header: `simple`/`explode=false`), overridable per parameter. Path
+ * parameters additionally honor `label` and `matrix`, and query parameters
+ * support `spaceDelimited`, `pipeDelimited`, and `deepObject`. Array and object
+ * values therefore expand into the documented wire forms rather than being
+ * JSON-encoded.
  *
  * Composed schemas are supported at a practical level: `allOf` members are
  * merged (properties unioned, `required` unioned, scalar keywords overridden
@@ -72,6 +74,12 @@ export interface GeneratedRequestData {
   path: string;
   /** Path parameter name -> value (values serialized to strings). */
   pathParams: Record<string, string>;
+  /**
+   * Path parameter names whose {@link pathParams} value is already
+   * percent-encoded wire text (`label`/`matrix`). Omitted when empty; other
+   * path values are raw and are encoded when the URL is composed.
+   */
+  preEncodedPathParams?: readonly string[];
   /** Query parameter name -> value, in OpenAPI `form` wire form. */
   query: Record<string, QueryValue>;
   /**
@@ -702,6 +710,99 @@ function serializeSimple(value: unknown, explode: boolean): string {
   return toScalarString(value);
 }
 
+/** Encode one scalar path component while leaving structural delimiters literal. */
+function encodePathComponent(value: string): string {
+  return encodeURIComponent(value);
+}
+
+/**
+ * Serialize a value using the `label` path style, percent-encoding scalar
+ * components but leaving the `.`, `,`, and `=` delimiters literal.
+ */
+function serializeLabel(value: unknown, explode: boolean): string {
+  if (Array.isArray(value)) {
+    const items = value.map((item) => encodePathComponent(toScalarString(item)));
+    return `.${items.join(explode ? "." : ",")}`;
+  }
+  if (isObject(value)) {
+    const entries = Object.entries(value);
+    if (explode) {
+      return `.${entries
+        .map(
+          ([key, item]) =>
+            `${encodePathComponent(key)}=${encodePathComponent(toScalarString(item))}`,
+        )
+        .join(".")}`;
+    }
+    return `.${entries
+      .flatMap(([key, item]) => [
+        encodePathComponent(key),
+        encodePathComponent(toScalarString(item)),
+      ])
+      .join(",")}`;
+  }
+  return `.${encodePathComponent(toScalarString(value))}`;
+}
+
+/**
+ * Serialize a value using the `matrix` path style, percent-encoding scalar
+ * components but leaving the `;` and `=` delimiters literal.
+ */
+function serializeMatrix(name: string, value: unknown, explode: boolean): string {
+  const encodedName = encodePathComponent(name);
+  if (Array.isArray(value)) {
+    const items = value.map((item) => encodePathComponent(toScalarString(item)));
+    if (explode) {
+      return items.map((item) => `;${encodedName}=${item}`).join("");
+    }
+    return `;${encodedName}=${items.join(",")}`;
+  }
+  if (isObject(value)) {
+    const entries = Object.entries(value);
+    if (explode) {
+      return entries
+        .map(
+          ([key, item]) =>
+            `;${encodePathComponent(key)}=${encodePathComponent(toScalarString(item))}`,
+        )
+        .join("");
+    }
+    return `;${encodedName}=${entries
+      .flatMap(([key, item]) => [
+        encodePathComponent(key),
+        encodePathComponent(toScalarString(item)),
+      ])
+      .join(",")}`;
+  }
+  return `;${encodedName}=${encodePathComponent(toScalarString(value))}`;
+}
+
+/** A serialized path value plus whether it is already percent-encoded. */
+interface SerializedPathParameter {
+  value: string;
+  preEncoded: boolean;
+}
+
+/**
+ * Serialize a path parameter for its effective style. `label`/`matrix` values
+ * are already percent-encoded; `simple` and unknown styles stay raw so URL
+ * composition keeps encoding them as before.
+ */
+function serializePathParameter(
+  name: string,
+  value: unknown,
+  style: string,
+  explode: boolean,
+): SerializedPathParameter {
+  if (style === "label") {
+    return { value: serializeLabel(value, explode), preEncoded: true };
+  }
+  if (style === "matrix") {
+    return { value: serializeMatrix(name, value, explode), preEncoded: true };
+  }
+  return { value: serializeSimple(value, explode), preEncoded: false };
+}
+
 /** A single serialized query-string entry (name/value pair). */
 type QueryEntry = [string, string];
 
@@ -782,6 +883,7 @@ function addQueryEntry(
 /** Generate request data for one operation using an already-seeded faker. */
 function generateWith(operation: OperationEntry, faker: Faker): GeneratedRequestData {
   const pathParams: Record<string, string> = {};
+  const preEncodedPathParams: string[] = [];
   const query: Record<string, QueryValue> = {};
   const headers: Record<string, string> = {};
 
@@ -792,13 +894,19 @@ function generateWith(operation: OperationEntry, faker: Faker): GeneratedRequest
     const raw = generateParameterValue(parameter, faker);
     switch (parameter.in) {
       case "path": {
-        // `simple` is the path default; `label`/`matrix` are not implemented and
-        // fall back to `simple` serialization (documented limitation).
+        // `simple` is the path default; `label` and `matrix` are implemented.
+        // Other/unknown styles fall back to `simple` without warning.
         const style = parameterStyle(parameter);
-        pathParams[parameter.name] = serializeSimple(
+        const serialized = serializePathParameter(
+          parameter.name,
           raw,
+          style,
           parameterExplode(parameter, style),
         );
+        pathParams[parameter.name] = serialized.value;
+        if (serialized.preEncoded) {
+          preEncodedPathParams.push(parameter.name);
+        }
         break;
       }
       case "query": {
@@ -833,6 +941,9 @@ function generateWith(operation: OperationEntry, faker: Faker): GeneratedRequest
     query,
     headers,
   };
+  if (preEncodedPathParams.length > 0) {
+    result.preEncodedPathParams = preEncodedPathParams;
+  }
 
   const body = generateRequestBody(operation.requestBody, faker);
   if (body !== undefined) {

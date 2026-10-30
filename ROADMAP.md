@@ -9,14 +9,15 @@ priorities change; the Kanban board remains the source of truth for ticket statu
 
 ## Where we are
 
-SPEC-1 through SPEC-33 are `done`; P3 (adoption and live end-to-end proof) is
+SPEC-1 through SPEC-34 are `done`; P3 (adoption and live end-to-end proof) is
 complete and committed. The P2 zero-override milestone remains complete.
 
 P4 (SPEC-33…41) covers the capabilities deferred by P2/P3: base-URL fallback
 breadth, `label`/`matrix` path styles, cookies, selectors beyond `all`, OpenAPI
 3.1 `webhooks`, non-JSON bodies, `securitySchemes`-derived and per-operation
-auth, and remote specs. SPEC-33 is done; the remaining eight are `todo`
-skeletons. No other P4 implementation has started.
+auth, and remote specs. SPEC-33 and SPEC-34 are done (the latter ships
+`label`/`matrix` path styles); the remaining seven are `todo` skeletons. No
+other P4 implementation has started.
 
 P0 (correctness and trust) and P1 (proof it works) are both closed and
 committed on `master`. The P0 commits are:
@@ -391,15 +392,15 @@ Claim → evidence → result:
 ### P4 — deferred capability expansion (in progress)
 
 P4 is in progress. Nine skeleton tickets were seeded on 2026-10-24 from a
-roadmap-vs-implementation gap review. SPEC-33 is done; the remaining eight are
-`todo` and await planner elaboration. The order below is the work order; do not
-reorder it without updating this file. Each ticket must be planned before
-implementation, and docs must describe shipped behavior only.
+roadmap-vs-implementation gap review. SPEC-33 and SPEC-34 are done; the
+remaining seven are `todo` and await planner elaboration. The order below is
+the work order; do not reorder it without updating this file. Each ticket must
+be planned before implementation, and docs must describe shipped behavior only.
 
 | Order | Key | Ticket ID | Priority | Status | Title |
 |---|---|---|---|---|---|
 | 1 | SPEC-33 | `01M5QTK2DF4M4R8BTX6RV905FS` | medium | done | Accept the first usable `servers[]` URL as the base-URL fallback |
-| 2 | SPEC-34 | `01M5QTK52K557BCDRTKWV0N6PS` | low | todo | Implement `label` and `matrix` path parameter styles |
+| 2 | SPEC-34 | `01M5QTK52K557BCDRTKWV0N6PS` | low | done | Implement `label` and `matrix` path parameter styles |
 | 3 | SPEC-35 | `01M5QTK8711DW0S5BFN0M78R1D` | medium | todo | Generate and send cookie parameters |
 | 4 | SPEC-36 | `01M5QTKB3GR8JAST4FF8Q35VQN` | high | todo | Support operation selectors beyond the `all` literal |
 | 5 | SPEC-37 | `01M5QTKE0SXC7BY1KX6WTCQGRT` | medium | todo | Catalogue OpenAPI 3.1 `webhooks` |
@@ -422,6 +423,12 @@ Decisions and resolved behavior:
   `servers[]` entry precedes a usable one; each skipped entry now warns on stderr
   (redacted), and the existing exit-`2` diagnostic remains when no entry is
   usable.
+- SPEC-34 (done) serializes `label`/`matrix` path parameters (primitive, array,
+  object; `explode` default `false`) into their OpenAPI wire forms. Structural
+  delimiters (`.`, `,`, `;`, `=`) stay literal while scalar components are
+  percent-encoded; URL composition substitutes these pre-encoded values verbatim
+  and keeps encoding raw `simple` path values as before. Unknown path styles
+  still fall back to `simple` without a new warning.
 - SPEC-37 must define how a webhook operation is exercised (there is no inbound
   request path to call).
 - SPEC-38 must define multipart/file-body representation without adding runtime
@@ -514,3 +521,11 @@ unless the product owner reopens them. Do not create tickets for them here.
   limitation is annotated as fixed. `npm run build` clean; `npm test` 305/305
   passing; reviewer passed. P4 remains open; the other eight tickets are
   untouched.
+- 2026-10-30: SPEC-34 done: `label`/`matrix` path parameters now serialize to
+  their documented wire forms for primitives, arrays, and objects (honoring
+  `explode`, default `false`), with structural delimiters literal and scalar
+  components percent-encoded during URL composition. The stale code comment
+  claiming a "documented limitation" was corrected; no README/ROADMAP
+  limitation entry existed to remove, and AGENTS.md/samples needed no edit.
+  `npm run build` clean; `npm test` 322/322 passing. P4 remains open; the other
+  seven tickets are untouched.

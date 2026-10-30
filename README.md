@@ -50,7 +50,7 @@ available in v1 and link to the matching limitation in
 | OpenAPI 3.0/3.1 local specs (JSON or YAML) | Shipped | Local `$ref` resolution; remote `http(s)` specs are not fetched. |
 | Explicit `{ method, path }` operation list | Shipped | Only the listed operations run. |
 | Whole-catalog selector `operations: all` | Shipped | Exact, case-sensitive literal; deterministic expansion. |
-| Derived request data | Shipped | Path/query/header parameters and JSON bodies; explicit example/examples → `default` → faker; required and optional fields generated. |
+| Derived request data | Shipped | Path/query/header parameters and JSON bodies; path parameters honor `simple`, `label`, and `matrix` styles with `explode`; explicit example/examples → `default` → faker; required and optional fields generated. |
 | Whole-body `payloads` overrides | Shipped | Replaces the generated JSON body for the matching operation. |
 | Global static auth | Shipped | Bearer `token` and/or static `headers`; `${ENV_VAR}` references; never derived from `security`. |
 | Base URL resolution | Shipped | Explicit `baseUrl` wins; otherwise the first usable `servers[].url`, with server-variable defaults substituted and unusable entries skipped with a warning. |

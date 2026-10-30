@@ -687,6 +687,162 @@ test("serializes path and header array/object parameters with the simple style",
   assert.equal(data.headers["X-Ids"], "1,2");
 });
 
+/** One label/matrix path-parameter shape with its schema and wire value. */
+const PATH_STYLE_SHAPES = [
+  {
+    shape: "primitive",
+    schema: { type: "integer", example: 5 },
+    value: 5,
+  },
+  {
+    shape: "array",
+    schema: { type: "array", items: { type: "integer" }, example: [3, 4, 5] },
+    value: [3, 4, 5],
+  },
+  {
+    shape: "object",
+    schema: {
+      type: "object",
+      properties: { role: { type: "string" }, firstName: { type: "string" } },
+      example: { role: "admin", firstName: "Alex" },
+    },
+    value: { role: "admin", firstName: "Alex" },
+  },
+];
+
+for (const { shape, schema } of PATH_STYLE_SHAPES) {
+  for (const explode of [false, true]) {
+    test(`serializes a ${explode ? "exploded" : "non-exploded"} label ${shape} path parameter`, () => {
+      const data = generateRequestData(
+        operation({
+          path: "/pets/{id}",
+          parameters: [{ name: "id", in: "path", required: true, style: "label", explode, schema }],
+        }),
+      );
+
+      const expected = {
+        primitive: ".5",
+        array: explode ? ".3.4.5" : ".3,4,5",
+        object: explode ? ".role=admin.firstName=Alex" : ".role,admin,firstName,Alex",
+      }[shape];
+
+      assert.equal(data.pathParams.id, expected);
+      assert.deepEqual(data.preEncodedPathParams, ["id"]);
+    });
+
+    test(`serializes a ${explode ? "exploded" : "non-exploded"} matrix ${shape} path parameter`, () => {
+      const data = generateRequestData(
+        operation({
+          path: "/pets/{id}",
+          parameters: [{ name: "id", in: "path", required: true, style: "matrix", explode, schema }],
+        }),
+      );
+
+      const expected = {
+        primitive: ";id=5",
+        array: explode ? ";id=3;id=4;id=5" : ";id=3,4,5",
+        object: explode ? ";role=admin;firstName=Alex" : ";id=role,admin,firstName,Alex",
+      }[shape];
+
+      assert.equal(data.pathParams.id, expected);
+      assert.deepEqual(data.preEncodedPathParams, ["id"]);
+    });
+  }
+}
+
+test("defaults label and matrix path parameters to explode=false", () => {
+  const data = generateRequestData(
+    operation({
+      path: "/pets/{labels}/{matrix}",
+      parameters: [
+        {
+          name: "labels",
+          in: "path",
+          required: true,
+          style: "label",
+          schema: { type: "array", items: { type: "integer" }, example: [3, 4, 5] },
+        },
+        {
+          name: "matrix",
+          in: "path",
+          required: true,
+          style: "matrix",
+          schema: { type: "array", items: { type: "integer" }, example: [3, 4, 5] },
+        },
+      ],
+    }),
+  );
+
+  assert.equal(data.pathParams.labels, ".3,4,5");
+  assert.equal(data.pathParams.matrix, ";matrix=3,4,5");
+  assert.deepEqual(data.preEncodedPathParams, ["labels", "matrix"]);
+});
+
+test("falls back to the simple style for unknown path styles", () => {
+  const data = generateRequestData(
+    operation({
+      path: "/pets/{filter}",
+      parameters: [
+        {
+          name: "filter",
+          in: "path",
+          required: true,
+          style: "not-a-style",
+          schema: {
+            type: "object",
+            properties: { role: { type: "string" } },
+            example: { role: "admin" },
+          },
+        },
+      ],
+    }),
+  );
+
+  assert.equal(data.pathParams.filter, "role,admin");
+  assert.equal(data.preEncodedPathParams, undefined);
+});
+
+test("percent-encodes label and matrix scalar components but keeps delimiters literal", () => {
+  const data = generateRequestData(
+    operation({
+      path: "/pets/{labels}/{matrix}/{primitive}",
+      parameters: [
+        {
+          name: "labels",
+          in: "path",
+          required: true,
+          style: "label",
+          explode: true,
+          schema: {
+            type: "object",
+            properties: { role: { type: "string" } },
+            example: { role: "a,b" },
+          },
+        },
+        {
+          name: "matrix",
+          in: "path",
+          required: true,
+          style: "matrix",
+          explode: true,
+          schema: { type: "array", items: { type: "string" }, example: ["a b", "c,d"] },
+        },
+        {
+          name: "primitive",
+          in: "path",
+          required: true,
+          style: "matrix",
+          schema: { type: "string", example: "a;b=c" },
+        },
+      ],
+    }),
+  );
+
+  assert.equal(data.pathParams.labels, ".role=a%2Cb");
+  assert.equal(data.pathParams.matrix, ";matrix=a%20b;matrix=c%2Cd");
+  assert.equal(data.pathParams.primitive, ";primitive=a%3Bb%3Dc");
+});
+
 test("respects integer minimum and maximum", () => {
   for (let seed = 1; seed <= 20; seed += 1) {
     const data = generateRequestData(

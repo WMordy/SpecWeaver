@@ -85,8 +85,12 @@
  * Path-parameter substitution and query-string serialization happen **here at
  * emission time** (Node), and the fully-composed URL is stored per operation in
  * the data file. This keeps the emitted k6 script minimal and its wiring
- * deterministic and unit-testable without requiring k6. {@link buildRequestUrl}
- * is exported for direct testing.
+ * deterministic and unit-testable without requiring k6. Path values may be
+ * raw (e.g. `simple`) and are percent-encoded here, or already-encoded
+ * `label`/`matrix` wire strings (see `preEncodedPathParams`) that are
+ * substituted verbatim so their `.`, `,`, `;`, and `=` delimiters stay literal.
+ * Query values are always encoded here. {@link buildRequestUrl} is exported for
+ * direct testing.
  */
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -165,7 +169,11 @@ export interface EmittedOperation {
   route: string;
   /** Base URL + path (params substituted) + query string, fully composed. */
   url: string;
-  /** Path parameter name -> value (already used in {@link route}). */
+  /**
+   * Path parameter name -> serialized value (already used in {@link route}).
+   * Informational: {@link url} is authoritative. `label`/`matrix` values are
+   * percent-encoded wire strings; other styles are raw values.
+   */
   pathParams: Record<string, string>;
   /** Query parameter name -> wire value(s). */
   query: Record<string, QueryValue>;
@@ -596,16 +604,25 @@ export function resolveBaseUrl(input: Pick<EmitInput, "config" | "specs">): stri
  * Compose the fully-qualified request URL for one operation: base URL + path
  * with path parameters substituted + query string.
  *
- * Path and query values are percent-encoded. A trailing slash on the base URL
- * is stripped so `https://host/` + `/pets` does not yield `https://host//pets`.
+ * Raw path values and all query values are percent-encoded here. Path values
+ * named in {@link GeneratedRequestData.preEncodedPathParams} (`label`/`matrix`)
+ * are already-encoded wire strings and are substituted verbatim. A trailing
+ * slash on the base URL is stripped so `https://host/` + `/pets` does not yield
+ * `https://host//pets`.
  */
 export function buildRequestUrl(
   baseUrl: string,
-  request: Pick<GeneratedRequestData, "path" | "pathParams" | "query">,
+  request: Pick<
+    GeneratedRequestData,
+    "path" | "pathParams" | "query" | "preEncodedPathParams"
+  >,
 ): string {
   let route = request.path;
+  const preEncoded = new Set(request.preEncodedPathParams ?? []);
   for (const [name, value] of Object.entries(request.pathParams ?? {})) {
-    route = route.split(`{${name}}`).join(encodeURIComponent(value));
+    route = route
+      .split(`{${name}}`)
+      .join(preEncoded.has(name) ? value : encodeURIComponent(value));
   }
 
   const pairs: string[] = [];

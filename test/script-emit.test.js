@@ -168,6 +168,61 @@ test("composes the request URL from base URL, path params, and query", () => {
   assert.deepEqual(data.operations[0].query, { limit: "5" });
 });
 
+test("substitutes pre-encoded label and matrix path values verbatim", () => {
+  const built = buildRequestUrl("http://api.example.com", {
+    path: "/pets/{labels}/{matrix}",
+    pathParams: {
+      labels: ".role=a%2Cb.firstName=Alex",
+      matrix: ";matrix=a%20b;matrix=c%2Cd",
+    },
+    preEncodedPathParams: ["labels", "matrix"],
+    query: { q: "a b" },
+  });
+
+  assert.equal(
+    built,
+    "http://api.example.com/pets/.role=a%2Cb.firstName=Alex/;matrix=a%20b;matrix=c%2Cd?q=a%20b",
+  );
+  assert.doesNotMatch(built, /%25/);
+});
+
+test("emits composed label/matrix URLs with unchanged query, header, and body data", () => {
+  const { data } = emitScript({
+    config: config(),
+    specs: [spec(document([{ url: "http://api.example.com" }]))],
+    requests: [
+      request({
+        method: "POST",
+        path: "/pets/{labels}/{matrix}",
+        pathParams: {
+          labels: ".role=a%2Cb.firstName=Alex",
+          matrix: ";matrix=a%20b;matrix=c%2Cd",
+        },
+        preEncodedPathParams: ["labels", "matrix"],
+        query: { limit: "5" },
+        headers: { "X-Request-Id": "abc" },
+        body: { name: "Rex" },
+      }),
+    ],
+  });
+
+  const operation = data.operations[0];
+  assert.equal(
+    operation.url,
+    "http://api.example.com/pets/.role=a%2Cb.firstName=Alex/;matrix=a%20b;matrix=c%2Cd?limit=5",
+  );
+  assert.deepEqual(operation.pathParams, {
+    labels: ".role=a%2Cb.firstName=Alex",
+    matrix: ";matrix=a%20b;matrix=c%2Cd",
+  });
+  assert.deepEqual(operation.query, { limit: "5" });
+  assert.deepEqual(operation.headers, {
+    "X-Request-Id": "abc",
+    "Content-Type": "application/json",
+  });
+  assert.deepEqual(JSON.parse(operation.body), { name: "Rex" });
+});
+
 test("serializes headers, including injected auth headers, unchanged", () => {
   const { script, data } = emitScript({
     config: config(),

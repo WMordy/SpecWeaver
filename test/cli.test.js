@@ -570,6 +570,120 @@ test("built CLI collapses cross-spec duplicates under operations: all and warns 
   assert.deepEqual(firstKeys, secondKeys);
 });
 
+test("built CLI expands operationId, tags, and path-pattern selectors in config-entry order", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writePathsSpec(dir, "openapi.json", {
+    "/pets": {
+      get: { operationId: "listPets", tags: ["pets"], ...apiOperation() },
+      post: {
+        operationId: "createPet",
+        tags: ["pets", "store"],
+        ...apiOperation(),
+      },
+    },
+    "/pets/{id}": {
+      get: {
+        operationId: "getPet",
+        tags: ["pets"],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } },
+        ],
+        ...apiOperation(),
+      },
+    },
+    "/store": {
+      delete: {
+        operationId: "clearStore",
+        tags: ["store"],
+        ...apiOperation(),
+      },
+    },
+  });
+
+  const run = runSandboxed(
+    dir,
+    `specs:
+  - ${specPath}
+operations:
+  - operationId: getPet
+  - tags: [store]
+  - path: /pets/*
+  - method: GET
+    path: /pets
+`,
+  );
+
+  assert.equal(run.result.status, EXIT_SUCCESS, run.result.stderr);
+  assert.doesNotMatch(run.result.stderr, /not present in the loaded spec/);
+  const results = JSON.parse(readFileSync(run.resultsPath, "utf8"));
+  // Config-entry order, each expansion in catalog order, deduplicated.
+  assert.deepEqual(Object.keys(results.checks), [
+    "GET /pets/{id}",
+    "POST /pets",
+    "DELETE /store",
+    "GET /pets",
+  ]);
+});
+
+test("built CLI warns per unmatched selector form and keeps the matched operations", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writeSpec(dir);
+
+  const run = runSandboxed(
+    dir,
+    `specs:
+  - ${specPath}
+operations:
+  - method: GET
+    path: /pets
+  - operationId: nope
+  - tags: [nope]
+  - path: /nope/**
+`,
+  );
+
+  assert.equal(run.result.status, EXIT_SUCCESS, run.result.stderr);
+  assert.match(
+    run.result.stderr,
+    /warning: operation selector operationId "nope" is not present in the loaded spec\(s\); skipping/,
+  );
+  assert.match(
+    run.result.stderr,
+    /warning: operation selector tags \["nope"\] is not present in the loaded spec\(s\); skipping/,
+  );
+  assert.match(
+    run.result.stderr,
+    /warning: operation selector path pattern "\/nope\/\*\*" is not present in the loaded spec\(s\); skipping/,
+  );
+  const results = JSON.parse(readFileSync(run.resultsPath, "utf8"));
+  assert.deepEqual(Object.keys(results.checks), ["GET /pets"]);
+});
+
+test("built CLI exits 2 before k6 and lists unmatched selectors when none match", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = writeSpec(dir);
+
+  const run = runSandboxed(
+    dir,
+    `specs:
+  - ${specPath}
+operations:
+  - operationId: nope
+  - tags: [nope]
+  - path: /nope/**
+`,
+  );
+
+  assert.equal(run.result.status, EXIT_SPECWEAVER_ERROR, run.result.stderr);
+  assert.match(run.result.stderr, /none of the configured operations were found/);
+  assert.match(run.result.stderr, /Unmatched selectors:/);
+  assert.match(run.result.stderr, /- operationId "nope"/);
+  assert.match(run.result.stderr, /- tags \["nope"\]/);
+  assert.match(run.result.stderr, /- path pattern "\/nope\/\*\*"/);
+  assert.equal(existsSync(run.k6Marker), false, "k6 must not be invoked");
+  assert.equal(existsSync(run.resultsPath), false, "no results file");
+});
+
 test("built CLI exits 2 with an all-specific message when operations: all has an empty catalog", () => {
   const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
   const specPath = writeSpec31(dir, {

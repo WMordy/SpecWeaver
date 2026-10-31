@@ -25,9 +25,12 @@
  * ```yaml
  * specs:                      # REQUIRED to execute, local path(s) or list (no URLs)
  *   - ./openapi.yaml
- * operations:                 # REQUIRED: non-empty list of { method, path }, or the literal `all`
- *   - method: GET
+ * operations:                 # REQUIRED: non-empty list, or the literal `all`
+ *   - method: GET             # explicit form: exact `METHOD path` match
  *     path: /pets
+ *   - operationId: listPets   # exact `operationId` match
+ *   - tags: [pets]            # tag selector, OR over the listed tags
+ *   - path: /pets/*           # path pattern: `*` one segment, `**` remainder
  * # operations: all          # selects every operation in the loaded catalog
  * baseUrl: https://api.example.com  # OPTIONAL, request base URL (overrides the spec's first usable servers[].url; consumed by SPEC-6)
  * auth:                       # OPTIONAL, static token/headers (env-referenceable)
@@ -48,21 +51,42 @@ import { readFileSync } from "node:fs";
 
 import { parse as parseYaml } from "yaml";
 
-/** A single opt-in operation. `method` + `path` jointly key the operation. */
+/**
+ * A single `operations` entry (SPEC-36). Exactly one selector form per entry;
+ * validation rejects any entry mixing fields.
+ *
+ * - **Explicit** `{ method, path }` — exact `METHOD path` match (the v1 form).
+ * - **`{ path }`** — without a wildcard, matches the exact path with **any**
+ *   method; with `*`/`**`, a path pattern (see below). An optional valid
+ *   `method` restricts the match to one method.
+ * - **`{ operationId }`** — exact, case-sensitive match on the catalogued
+ *   `operationId`.
+ * - **`{ tags }`** — a non-empty list of tags; selects every operation
+ *   declaring **any** listed tag (OR semantics, case-sensitive).
+ *
+ * A path-pattern `*` matches exactly one non-empty path segment (`[^/]+`) and
+ * `**` matches any characters, including `/` (`.*`). A
+ * `path` containing `*` is therefore always a pattern; explicit wildcard-free
+ * `{ method, path }` entries keep their exact-match semantics.
+ */
 export interface OperationConfig {
-  /** Upper-cased HTTP method, e.g. `GET`. */
-  method: string;
-  /** OpenAPI path, e.g. `/pets`. */
-  path: string;
+  /** Upper-cased HTTP method, e.g. `GET`. Required for the explicit form; optional on `path` entries. */
+  method?: string;
+  /** OpenAPI path or path pattern, e.g. `/pets` or `/pets/*`. */
+  path?: string;
+  /** Exact `operationId` match. */
+  operationId?: string;
+  /** Tags selector (OR semantics over the operation's declared tags). */
+  tags?: string[];
 }
 
 /**
  * The `operations` selector from the config.
  *
- * Either an explicit non-empty list of {@link OperationConfig} entries, or the
- * exact literal `"all"`. `"all"` selects every operation in the loaded spec
- * catalog; the CLI expands it into concrete operations at run time (SPEC-23),
- * so the config layer only validates and exposes the selector here.
+ * Either a non-empty list of {@link OperationConfig} entries, or the exact
+ * literal `"all"`. Each entry is expanded against the loaded spec catalog at
+ * run time (`selection.ts`, SPEC-23/SPEC-36), so the config layer only
+ * validates and exposes the selector here.
  */
 export type OperationsSelector = OperationConfig[] | "all";
 
@@ -209,6 +233,8 @@ const ROOT_KEYS = new Set([
 ]);
 const LOAD_KEYS = new Set(["vus", "duration"]);
 const AUTH_KEYS = new Set(["token", "headers"]);
+/** Fields accepted in an `operations` entry (one selector form per entry). */
+const OPERATION_SELECTOR_KEYS = new Set(["method", "path", "operationId", "tags"]);
 /**
  * Fields accepted in a `payloads` entry. v1 supports only a whole-value JSON
  * body replacement; anything else is an explicit error rather than silently
@@ -264,7 +290,7 @@ function validateOperations(
   errors: string[],
 ): OperationsSelector {
   if (value === undefined || value === null) {
-    errors.push("`operations` is required and must list at least one `{ method, path }` entry");
+    errors.push("`operations` is required and must list at least one operation or selector entry");
     return [];
   }
   // The selector is exact and case-sensitive: only the YAML scalar `all`.
@@ -273,7 +299,7 @@ function validateOperations(
   }
   if (!Array.isArray(value)) {
     errors.push(
-      "`operations` must be a non-empty list of `{ method, path }` entries or the literal `all`",
+      "`operations` must be a non-empty list of `{ method, path }` entries, selector entries, or the literal `all`",
     );
     return [];
   }
@@ -288,52 +314,129 @@ function validateOperations(
   value.forEach((entry, index) => {
     const at = `operations[${index}]`;
     if (!isPlainObject(entry)) {
-      errors.push(`\`${at}\` must be a mapping with \`method\` and \`path\``);
+      errors.push(
+        `\`${at}\` must be a mapping defining exactly one selector form: \`method\`+\`path\`, \`path\`, \`operationId\`, or \`tags\``,
+      );
       return;
     }
 
     for (const key of Object.keys(entry)) {
-      if (key !== "method" && key !== "path") {
+      if (!OPERATION_SELECTOR_KEYS.has(key)) {
         errors.push(`unknown field \`${at}.${key}\``);
       }
     }
 
-    const rawMethod = entry.method;
-    const rawPath = entry.path;
-    let valid = true;
-    let method = "";
-    let path = "";
+    // Presence, not type, decides the form: an invalid value still gets a
+    // field-specific error instead of falling through to another form.
+    const hasOperationId = entry.operationId !== undefined;
+    const hasTags = entry.tags !== undefined;
+    const hasMethod = entry.method !== undefined;
+    const hasPath = entry.path !== undefined;
 
-    if (typeof rawMethod !== "string" || rawMethod.trim() === "") {
-      errors.push(`\`${at}.method\` must be a non-empty string`);
-      valid = false;
-    } else if (!HTTP_METHOD_SET.has(rawMethod.toUpperCase())) {
+    // Each entry must define exactly one form; mixing fields is an error, not
+    // a silent reinterpretation.
+    if (hasOperationId && (hasTags || hasMethod || hasPath)) {
       errors.push(
-        `\`${at}.method\` must be one of ${HTTP_METHODS.join(", ")} (received "${rawMethod}")`,
+        `\`${at}\` must define exactly one selector form; \`operationId\` cannot be combined with \`method\`, \`path\`, or \`tags\``,
       );
-      valid = false;
-    } else {
-      method = rawMethod.toUpperCase();
+      return;
+    }
+    if (hasTags && (hasMethod || hasPath)) {
+      errors.push(
+        `\`${at}\` must define exactly one selector form; \`tags\` cannot be combined with \`method\` or \`path\``,
+      );
+      return;
     }
 
+    if (hasOperationId) {
+      const operationId = entry.operationId;
+      if (typeof operationId !== "string" || operationId.trim() === "") {
+        errors.push(`\`${at}.operationId\` must be a non-empty string`);
+        return;
+      }
+      operations.push({ operationId });
+      return;
+    }
+
+    if (hasTags) {
+      const rawTags = entry.tags;
+      if (!Array.isArray(rawTags) || rawTags.length === 0) {
+        errors.push(`\`${at}.tags\` must be a non-empty list of non-empty strings`);
+        return;
+      }
+      const collected: string[] = [];
+      for (const [tagIndex, tag] of rawTags.entries()) {
+        if (typeof tag !== "string" || tag.trim() === "") {
+          errors.push(`\`${at}.tags[${tagIndex}]\` must be a non-empty string`);
+        } else {
+          collected.push(tag);
+        }
+      }
+      if (collected.length !== rawTags.length) {
+        return;
+      }
+      operations.push({ tags: collected });
+      return;
+    }
+
+    const validateMethod = (): string | undefined => {
+      const rawMethod = entry.method;
+      if (typeof rawMethod !== "string" || rawMethod.trim() === "") {
+        errors.push(`\`${at}.method\` must be a non-empty string`);
+        return undefined;
+      }
+      if (!HTTP_METHOD_SET.has(rawMethod.toUpperCase())) {
+        errors.push(
+          `\`${at}.method\` must be one of ${HTTP_METHODS.join(", ")} (received "${rawMethod}")`,
+        );
+        return undefined;
+      }
+      return rawMethod.toUpperCase();
+    };
+
+    // `path`/`method` forms: `path` is always required.
+    if (!hasPath) {
+      if (hasMethod) {
+        validateMethod();
+        errors.push(`\`${at}.path\` must be a non-empty string`);
+      } else {
+        errors.push(
+          `\`${at}\` must be a mapping defining exactly one selector form: \`method\`+\`path\`, \`path\`, \`operationId\`, or \`tags\``,
+        );
+      }
+      return;
+    }
+
+    const rawPath = entry.path;
+    const method = hasMethod ? validateMethod() : undefined;
+    let valid = !hasMethod || method !== undefined;
     if (typeof rawPath !== "string" || rawPath.trim() === "") {
       errors.push(`\`${at}.path\` must be a non-empty string`);
       valid = false;
+    }
+    if (!valid || typeof rawPath !== "string") {
+      return;
+    }
+    const isPattern = rawPath.includes("*");
+
+    if (method !== undefined && !isPattern) {
+      // Legacy explicit form: exact `METHOD path`, duplicate-checked like v1.
+      const id = `${method} ${rawPath}`;
+      if (seen.has(id)) {
+        errors.push(`duplicate operation \`${id}\``);
+        return;
+      }
+      seen.add(id);
+      operations.push({ method, path: rawPath });
+      return;
+    }
+
+    if (method !== undefined) {
+      operations.push({ method, path: rawPath });
     } else {
-      path = rawPath;
+      // Exact-any-method (wildcard-free) or a `method`-less pattern entry.
+      operations.push({ path: rawPath });
     }
-
-    if (!valid) {
-      return;
-    }
-
-    const id = `${method} ${path}`;
-    if (seen.has(id)) {
-      errors.push(`duplicate operation \`${id}\``);
-      return;
-    }
-    seen.add(id);
-    operations.push({ method, path });
   });
 
   return operations;

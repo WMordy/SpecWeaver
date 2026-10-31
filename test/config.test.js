@@ -232,6 +232,80 @@ test("a duplicate operation (same method + path) fails validation", () => {
   assert.throws(() => parseConfig(yaml), /duplicate operation `GET \/pets`/);
 });
 
+test("operations accepts operationId, tags, and path-pattern selector entries", () => {
+  const { config } = parseConfig(`operations:
+  - operationId: listPets
+  - tags: [pets, store]
+  - path: /pets/*
+  - path: /pets/{id}
+  - path: /pets/**
+    method: get
+`);
+  assert.deepEqual(config.operations, [
+    { operationId: "listPets" },
+    { tags: ["pets", "store"] },
+    { path: "/pets/*" },
+    { path: "/pets/{id}" },
+    { method: "GET", path: "/pets/**" },
+  ]);
+});
+
+test("invalid selector entries are aggregated and name operations[i]", () => {
+  const yaml = `operations:
+  - operationId: ""
+  - tags: []
+  - tags: [pets, ""]
+  - path: ""
+  - method: FETCH
+    path: /pets/*
+  - operationId: listPets
+    path: /pets
+  - tags: [pets]
+    path: /pets
+  - path: /pets
+    extra: nope
+  - operationId: 42
+  - tags: pets
+`;
+  assert.throws(
+    () => parseConfig(yaml),
+    (error) => {
+      assert.ok(error instanceof ConfigError);
+      const text = error.message;
+      for (const expected of [
+        /`operations\[0\]\.operationId` must be a non-empty string/,
+        /`operations\[1\]\.tags` must be a non-empty list of non-empty strings/,
+        /`operations\[2\]\.tags\[1\]` must be a non-empty string/,
+        /`operations\[3\]\.path` must be a non-empty string/,
+        /`operations\[4\]\.method` must be one of/,
+        /`operations\[5\]` must define exactly one selector form; `operationId`/,
+        /`operations\[6\]` must define exactly one selector form; `tags`/,
+        /unknown field `operations\[7\]\.extra`/,
+        /`operations\[8\]\.operationId` must be a non-empty string/,
+        /`operations\[9\]\.tags` must be a non-empty list of non-empty strings/,
+      ]) {
+        assert.match(text, expected);
+      }
+      return true;
+    },
+  );
+});
+
+test("wildcard-free `{ method, path }` entries keep their legacy validation", () => {
+  assert.throws(
+    () => parseConfig("operations:\n  - method: GET\n    path: /pets\n  - method: get\n    path: /pets\n"),
+    /duplicate operation `GET \/pets`/,
+  );
+  assert.throws(
+    () => parseConfig("operations:\n  - method: FETCH\n    path: /pets\n"),
+    /operations\[0\]\.method.*must be one of/,
+  );
+  assert.throws(
+    () => parseConfig("operations:\n  - method: GET\n"),
+    /operations\[0\]\.path.*non-empty string/,
+  );
+});
+
 test("operations accepts the exact literal `all`", () => {
   const { config } = parseConfig("specs: ./openapi.yaml\noperations: all\n");
   assert.equal(config.operations, "all");
@@ -264,7 +338,7 @@ load:
 
 test("the `all` literal is exact and case-sensitive", () => {
   const acceptedForms =
-    /`operations` must be a non-empty list of `\{ method, path \}` entries or the literal `all`/;
+    /`operations` must be a non-empty list of `\{ method, path \}` entries, selector entries, or the literal `all`/;
   for (const value of ["ALL", "All", '" all"', "all!", "operations"]) {
     assert.throws(
       () => parseConfig(`operations: ${value}\n`),
@@ -280,7 +354,7 @@ test("the `all` literal is exact and case-sensitive", () => {
 
 test("non-list, non-`all` operations selectors are rejected", () => {
   const acceptedForms =
-    /`operations` must be a non-empty list of `\{ method, path \}` entries or the literal `all`/;
+    /`operations` must be a non-empty list of `\{ method, path \}` entries, selector entries, or the literal `all`/;
   for (const value of ['"*"', "true", "{ all: true }", "42"]) {
     assert.throws(
       () => parseConfig(`operations: ${value}\n`),

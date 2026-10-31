@@ -55,6 +55,8 @@ export interface OperationEntry {
   path: string;
   /** The spec's `operationId`, when present. */
   operationId?: string;
+  /** The operation's declared `tags`, in document order, when any are present. */
+  tags?: string[];
   /** Path- and operation-level parameters (operation wins on conflict). */
   parameters: ParameterObject[];
   /** The operation's request body, when present. */
@@ -472,6 +474,14 @@ export function buildOperationCatalog(document: JsonObject): OperationEntry[] {
       };
       if (typeof operation.operationId === "string") {
         entry.operationId = operation.operationId;
+      }
+      if (Array.isArray(operation.tags)) {
+        const tags = operation.tags.filter(
+          (tag): tag is string => typeof tag === "string",
+        );
+        if (tags.length > 0) {
+          entry.tags = tags;
+        }
       }
       if (isObject(operation.requestBody)) {
         entry.requestBody = operation.requestBody as RequestBodyObject;

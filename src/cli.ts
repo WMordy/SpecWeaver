@@ -10,7 +10,6 @@ import {
   loadConfig,
   type Config,
   type ConfigResult,
-  type OperationsSelector,
 } from "./config.js";
 import { generateAllRequestData, applyPayloadOverrides } from "./request-data.js";
 import {
@@ -41,12 +40,12 @@ import {
   type BaseUrlProblem,
   type FallbackBaseUrl,
 } from "./script/emit.js";
+import { selectOperations } from "./selection.js";
 import {
   SpecError,
   loadSpecs,
   zeroOperationWarnings,
   type LoadedSpec,
-  type OperationEntry,
 } from "./spec.js";
 
 /** Read the version string from the package manifest. */
@@ -88,76 +87,6 @@ function writeWarnings(warnings: readonly string[]): void {
  */
 function writeUnappliedPayloadWarnings(payloads: Config["payloads"]): void {
   writeWarnings(applyPayloadOverrides([], payloads).warnings);
-}
-
-/** The result of resolving the configured operation selector against the catalog. */
-interface OperationSelection {
-  /** Operations present in the catalog; the ones that will be executed. */
-  selected: OperationEntry[];
-  /** Configured operations absent from the catalog, in config order. */
-  unmatched: { method: string; path: string }[];
-  /** Non-fatal notices for cross-spec duplicates collapsed by `"all"`. */
-  duplicateWarnings: string[];
-}
-
-/**
- * Select operations from the loaded spec catalog (SPEC-23).
- *
- * An explicit list is matched on method + path, preserving the SPEC-2 behaviour:
- * entries absent from the spec(s) are returned as `unmatched` so the caller can
- * warn (partial match) or fail (no match at all) without losing the list.
- *
- * The literal `"all"` selects the whole catalog: every operation from every
- * configured spec, in spec order and within each spec in the deterministic
- * catalog order (document path order, then canonical method order). Cross-spec
- * duplicates on normalized `METHOD path` keep their first occurrence and report
- * each skipped duplicate, so nothing is dropped silently. `all` never yields
- * `unmatched` entries.
- */
-function selectOperations(
-  operations: OperationsSelector,
-  specs: readonly LoadedSpec[],
-): OperationSelection {
-  if (operations === "all") {
-    const selected: OperationEntry[] = [];
-    const duplicateWarnings: string[] = [];
-    // Key -> the source of the first occurrence, for duplicate diagnostics.
-    const firstSource = new Map<string, string>();
-    for (const spec of specs) {
-      for (const operation of spec.operations) {
-        const key = `${operation.method} ${operation.path}`;
-        const keptSource = firstSource.get(key);
-        if (keptSource !== undefined) {
-          duplicateWarnings.push(
-            `operation "${key}" is defined in both "${keptSource}" and "${spec.source}"; keeping the first occurrence and skipping the duplicate.`,
-          );
-          continue;
-        }
-        firstSource.set(key, spec.source);
-        selected.push(operation);
-      }
-    }
-    return { selected, unmatched: [], duplicateWarnings };
-  }
-
-  const catalog = new Map<string, OperationEntry>();
-  for (const spec of specs) {
-    for (const operation of spec.operations) {
-      catalog.set(`${operation.method} ${operation.path}`, operation);
-    }
-  }
-
-  const selected: OperationEntry[] = [];
-  const unmatched: { method: string; path: string }[] = [];
-  for (const { method, path } of operations) {
-    const operation = catalog.get(`${method} ${path}`);
-    if (operation === undefined) {
-      unmatched.push({ method, path });
-      continue;
-    }
-    selected.push(operation);
-  }
-  return { selected, unmatched, duplicateWarnings: [] };
 }
 
 /**
@@ -376,8 +305,8 @@ async function run(options: CliOptions): Promise<number> {
       process.stderr.write(
         [
           "error: none of the configured operations were found in the loaded spec(s); nothing to execute.",
-          "Unmatched operations:",
-          ...unmatched.map(({ method, path }) => `  - ${method} ${path}`),
+          "Unmatched selectors:",
+          ...unmatched.map(({ label }) => `  - ${label}`),
           "Add the missing operations to the spec(s) or correct the `operations` entries in the config.",
         ].join("\n") + "\n",
       );
@@ -385,11 +314,14 @@ async function run(options: CliOptions): Promise<number> {
     return EXIT_SPECWEAVER_ERROR;
   }
 
-  // A partial match still runs: report each operation that could not be built,
-  // then continue with the ones that were selected.
-  for (const { method, path } of unmatched) {
+  // A partial match still runs: report each selector entry that could not be
+  // built, then continue with the ones that were selected.
+  for (const entry of unmatched) {
+    const subject = entry.explicit
+      ? `operation "${entry.label}"`
+      : `operation selector ${entry.label}`;
     process.stderr.write(
-      `${WARNING_PREFIX} operation "${method} ${path}" is not present in the loaded spec(s); skipping.\n`,
+      `${WARNING_PREFIX} ${subject} is not present in the loaded spec(s); skipping.\n`,
     );
   }
 

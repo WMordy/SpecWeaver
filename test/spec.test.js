@@ -196,6 +196,40 @@ test("produces an operation catalog with method, path, operationId, parameters, 
   assert.deepEqual(operation.security, [{ apiKey: [] }]);
 });
 
+test("catalog records operation-level tags in document order and skips non-strings", () => {
+  const dir = makeDir();
+  const path = write(
+    dir,
+    "openapi.json",
+    JSON.stringify({
+      openapi: "3.0.3",
+      info: { title: "Tags", version: "1" },
+      paths: {
+        "/pets": {
+          get: {
+            tags: ["pets", "store"],
+            responses: { "200": { description: "ok" } },
+          },
+        },
+        "/plain": {
+          get: { responses: { "200": { description: "ok" } } },
+        },
+        "/mixed": {
+          get: {
+            tags: ["store", 7, "pets"],
+            responses: { "200": { description: "ok" } },
+          },
+        },
+      },
+    }),
+  );
+
+  const operations = loadSpec(path).operations;
+  assert.deepEqual(operations[0].tags, ["pets", "store"]);
+  assert.equal(operations[1].tags, undefined);
+  assert.deepEqual(operations[2].tags, ["store", "pets"]);
+});
+
 test("falls back to document-level security when an operation declares none", () => {
   const dir = makeDir();
   const path = write(

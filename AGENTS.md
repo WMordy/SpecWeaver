@@ -18,6 +18,7 @@ the source of truth for ticket status; ROADMAP tables can lag it.
 | `src/cli.ts` | Orchestration: config/specs → selection → payloads → auth → warnings → base-URL gate → emit → run → results. |
 | `src/config.ts` | YAML load, schema validation/defaults, CLI overrides, `${ENV_VAR}` resolution. |
 | `src/spec.ts` | OpenAPI 3.0/3.1 loading, `$ref` resolution (local files), operation cataloguing. |
+| `src/selection.ts` | `operations` expansion: `all`, explicit, `operationId`, tags, path patterns; deterministic union/dedupe and unmatched reporting. |
 | `src/request-data.ts` | Path/query/header/JSON-body generation and `payloads` whole-body overrides. |
 | `src/auth.ts` | Global static token/header injection and secret redaction. |
 | `src/coverage.ts` | Non-fatal coverage-gap warnings (non-JSON body, cookie, security-without-auth). |
@@ -67,6 +68,7 @@ k6 rules:
 | `test/auth.test.js` | Token/header injection, collision precedence, redaction, `${ENV_VAR}`. | no |
 | `test/request-data.test.js` | Parameter/body generation, example/default/faker chain, payload overrides, `$ref`s. | no |
 | `test/spec.test.js` | OpenAPI loading, internal/external-file `$ref`, catalog ordering, errors. | no |
+| `test/selection.test.js` | Selector expansion: `all`, explicit, `operationId`, tags, path patterns, dedupe, unmatched labels. | no |
 | `test/script-emit.test.js` | Emitted script/data shape, syntax, base URL; one runtime test. | one test |
 | `test/cli.test.js` | Built CLI end-to-end with fake k6: config/selection/base-URL gates/exit codes/temp. | no (stub) |
 | `test/run.test.js` | k6 discovery, spawn failures, temp cleanup. | no (stub) |
@@ -125,9 +127,9 @@ k6 rules:
   absolute `servers[].url` (unusable entries are skipped with a warning),
   otherwise the run exits `2`.
 - `specs` are local files only; remote `http(s)` URLs are not fetched.
-- Deferred (not shipped): selectors beyond `all` (`operationId`, tags,
-  wildcards), non-JSON bodies, cookies, `securitySchemes`-derived auth,
-  per-operation auth, and remote specs. See [ROADMAP.md](ROADMAP.md).
+- Deferred (not shipped): non-JSON bodies, cookies,
+  `securitySchemes`-derived auth, per-operation auth, and remote specs. See
+  [ROADMAP.md](ROADMAP.md).
 
 ## Contracts and docs
 

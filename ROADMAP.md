@@ -9,15 +9,15 @@ priorities change; the Kanban board remains the source of truth for ticket statu
 
 ## Where we are
 
-SPEC-1 through SPEC-34 are `done`; P3 (adoption and live end-to-end proof) is
+SPEC-1 through SPEC-36 are `done`; P3 (adoption and live end-to-end proof) is
 complete and committed. The P2 zero-override milestone remains complete.
 
 P4 (SPEC-33…41) covers the capabilities deferred by P2/P3: base-URL fallback
 breadth, `label`/`matrix` path styles, cookies, selectors beyond `all`, OpenAPI
 3.1 `webhooks`, non-JSON bodies, `securitySchemes`-derived and per-operation
-auth, and remote specs. SPEC-33 and SPEC-34 are done (the latter ships
-`label`/`matrix` path styles); the remaining seven are `todo` skeletons. No
-other P4 implementation has started.
+auth, and remote specs. SPEC-33, SPEC-34, and SPEC-36 are done (the latter two
+ship `label`/`matrix` path styles and the `operationId`, tags, and path-pattern
+selectors); the remaining five are `todo` skeletons.
 
 P0 (correctness and trust) and P1 (proof it works) are both closed and
 committed on `master`. The P0 commits are:
@@ -226,10 +226,12 @@ Dependencies (resolved):
 
 1. **Operation selection — partially delivered (`all` only).** `operations: all`
    selects every catalogued operation across every configured spec in
-   deterministic order. `operationId` selectors, `tags` selectors, `*`/wildcard
-   shorthands, per-operation include/exclude, and tolerant method/path matching
-   are **deferred**, not shipped. The only accepted selector is the exact,
-   case-sensitive literal `all`.
+   deterministic order. At P2 close, `operationId` selectors, `tags` selectors,
+   `*`/wildcard shorthands, per-operation include/exclude, and tolerant
+   method/path matching were **deferred**, not shipped; the only accepted
+   selector was the exact, case-sensitive literal `all`. P4/SPEC-36 later ships
+   the additive `operationId`, tags, and path-pattern forms (include/exclude
+   composition and tolerant matching remain deferred).
 2. **Payload contract — delivered and documented.** Precedence is
    `payloads` override (whole-body replacement) → explicit example/examples →
    schema `default` → faker by `type`/`format`; required and optional fields are
@@ -393,7 +395,7 @@ Claim → evidence → result:
 
 P4 is in progress. Nine skeleton tickets were seeded on 2026-10-24 from a
 roadmap-vs-implementation gap review. SPEC-33 and SPEC-34 are done; the
-remaining seven are `todo` and await planner elaboration. The order below is
+remaining six are `todo` and await planner elaboration. The order below is
 the work order; do not reorder it without updating this file. Each ticket must
 be planned before implementation, and docs must describe shipped behavior only.
 
@@ -402,7 +404,7 @@ be planned before implementation, and docs must describe shipped behavior only.
 | 1 | SPEC-33 | `01M5QTK2DF4M4R8BTX6RV905FS` | medium | done | Accept the first usable `servers[]` URL as the base-URL fallback |
 | 2 | SPEC-34 | `01M5QTK52K557BCDRTKWV0N6PS` | low | done | Implement `label` and `matrix` path parameter styles |
 | 3 | SPEC-35 | `01M5QTK8711DW0S5BFN0M78R1D` | medium | todo | Generate and send cookie parameters |
-| 4 | SPEC-36 | `01M5QTKB3GR8JAST4FF8Q35VQN` | high | todo | Support operation selectors beyond the `all` literal |
+| 4 | SPEC-36 | `01M5QTKB3GR8JAST4FF8Q35VQN` | high | done | Support operation selectors beyond the `all` literal |
 | 5 | SPEC-37 | `01M5QTKE0SXC7BY1KX6WTCQGRT` | medium | todo | Catalogue OpenAPI 3.1 `webhooks` |
 | 6 | SPEC-38 | `01M5QTKGSG573T640BKBVJJ8Q5` | high | todo | Generate non-JSON request bodies |
 | 7 | SPEC-39 | `01M5QTKKJBDDMR0AJV6ENT8661` | high | todo | Derive global auth from `securitySchemes` |
@@ -429,6 +431,14 @@ Decisions and resolved behavior:
   percent-encoded; URL composition substitutes these pre-encoded values verbatim
   and keeps encoding raw `simple` path values as before. Unknown path styles
   still fall back to `simple` without a new warning.
+- SPEC-36 (done) adds three additive selector forms next to `all` and
+  explicit `{ method, path }`: exact `{ operationId }`, `{ tags }` with
+  case-sensitive OR semantics, and `{ path }` patterns (`*` = one non-empty
+  segment, `**` = the remainder, optional `method` filter). Each entry expands
+  in catalog order; the final selection is the config-entry-ordered union,
+  deduplicated on `METHOD path` first-wins. No-match entries warn per selector
+  form; a zero-match selection keeps the SPEC-14 exit-`2` no-run path. Include/
+  exclude composition and tolerant matching remain deferred.
 - SPEC-37 must define how a webhook operation is exercised (there is no inbound
   request path to call).
 - SPEC-38 must define multipart/file-body representation without adding runtime
@@ -529,3 +539,12 @@ unless the product owner reopens them. Do not create tickets for them here.
   limitation entry existed to remove, and AGENTS.md/samples needed no edit.
   `npm run build` clean; `npm test` 322/322 passing. P4 remains open; the other
   seven tickets are untouched.
+- 2026-10-31: SPEC-36 approved and done. `operations` entries now
+  accept exact `{ operationId }`, case-sensitive OR `{ tags }`, and `{ path }`
+  patterns (`*` one non-empty segment, `**` remainder, optional `method`) as
+  additive forms; selection moved to `src/selection.ts` with deterministic
+  config-entry-ordered union expansion, `METHOD path` first-wins dedupe,
+  per-form unmatched warnings, and the unchanged SPEC-14 zero-match exit `2`.
+  `OperationEntry` records operation-level `tags`. README/AGENTS/examples
+  limitations no longer claim selectors are deferred. `npm run build` clean;
+  `npm test` 338/338 passing (16 new/updated selector, catalog, and CLI tests).

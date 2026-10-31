@@ -447,12 +447,14 @@ NODE
 Shipped and demonstrated here: `operations: all`, explicit operation lists,
 global static token/headers auth with `${ENV_VAR}` resolution, whole-body payload
 overrides, multiple local specs, explicit `baseUrl`, the three non-fatal coverage
-warnings, and the results JSON.
+warnings, and the results JSON. The README also documents the shipped
+`operationId`, `tags`, and path-pattern selector entries; the gallery keeps its
+examples on explicit lists.
 
-Deferred and **not** demonstrated or claimed: `operationId`/`tags`/wildcard
-selectors, tolerant method/path matching, non-JSON (multipart/form-data,
-form-urlencoded, XML) body generation, cookie support,
-`securitySchemes`-derived auth, per-operation auth, and remote `http(s)` specs.
+Deferred and **not** demonstrated or claimed: tolerant/fuzzy method/path
+matching, non-JSON (multipart/form-data, form-urlencoded, XML) body generation,
+cookie support, `securitySchemes`-derived auth, per-operation auth, and remote
+`http(s)` specs.
 
 See the roadmap for the authoritative limitations:
 

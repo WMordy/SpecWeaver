@@ -48,7 +48,7 @@ available in v1 and link to the matching limitation in
 | Capability | Status | Notes |
 | --- | --- | --- |
 | OpenAPI 3.0/3.1 local specs (JSON or YAML) | Shipped | Local `$ref` resolution; remote `http(s)` specs are not fetched. |
-| Explicit `{ method, path }` operation list | Shipped | Only the listed operations run. |
+| Selector entries: `{ method, path }`, `{ operationId }`, `{ tags }`, `{ path }` patterns | Shipped | Additive forms; deterministic union expansion with `METHOD path` dedupe. |
 | Whole-catalog selector `operations: all` | Shipped | Exact, case-sensitive literal; deterministic expansion. |
 | Derived request data | Shipped | Path/query/header parameters and JSON bodies; path parameters honor `simple`, `label`, and `matrix` styles with `explode`; explicit example/examples → `default` → faker; required and optional fields generated. |
 | Whole-body `payloads` overrides | Shipped | Replaces the generated JSON body for the matching operation. |
@@ -60,7 +60,6 @@ available in v1 and link to the matching limitation in
 | Results JSON, console summary, per-operation checks | Shipped | Documented-2xx requests pass; everything else fails. |
 | Opt-in `--fail-on-check-failure` gate | Shipped | Check failures are informational by default. |
 | CLI `--vus` / `--duration` / `--out` overrides | Shipped | Override the corresponding YAML values. |
-| Selectors beyond `all` (`operationId`, tags, wildcards) | Deferred | See [ROADMAP: P2 outcome](ROADMAP.md#p2-outcome) and [P2 limitations](ROADMAP.md#p2-limitations). |
 | Non-JSON body generation (XML, multipart, form-urlencoded) | Deferred | See [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
 | Cookie parameters | Deferred | See [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
 | `securitySchemes`-derived auth | Deferred | See [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
@@ -191,9 +190,12 @@ A complete example:
 ```yaml
 specs:                      # REQUIRED to execute: local path(s), no URLs
   - ./openapi.yaml
-operations:                 # REQUIRED: list of { method, path }, or the literal all
-  - method: GET
+operations:                 # REQUIRED: selector entries, or the literal all
+  - method: GET             # explicit form: exact METHOD path match
     path: /pets
+  - operationId: listPets   # exact operationId match
+  - tags: [pets]            # any listed tag (OR semantics)
+  - path: /pets/*           # path pattern: * one segment, ** the remainder
 # operations: all           # alternative: select every catalogued operation
 baseUrl: https://staging.example.com  # OPTIONAL: overrides the servers[].url fallback
 auth:                       # OPTIONAL: static token/headers (env-referenceable)
@@ -215,32 +217,53 @@ load:                       # OPTIONAL: default load profile
 | Field | Required | Type | Contract |
 | --- | --- | --- | --- |
 | `specs` | **yes** to execute | string \| string[] | Local OpenAPI 3.0/3.1 file path(s) (JSON or YAML). Relative paths resolve against the current working directory. Local `$ref`s are resolved; remote `http(s)://` documents are **not** fetched. Omitting `specs` exits `2` before k6 runs and before a results file is written. |
-| `operations` | **yes** | `{ method, path }[] \| all` | Either a non-empty explicit list or the exact, case-sensitive literal `all`. See [Operations](#operations-explicit-list-or-all). |
+| `operations` | **yes** | selector entries \| all | Either a non-empty list of selector entries (`{ method, path }`, `{ operationId }`, `{ tags }`, or `{ path }`) or the exact, case-sensitive literal `all`. See [Operations](#operations-selectors). |
 | `baseUrl` | no | string | Explicit request base URL. Must be a non-empty string (empty, whitespace-only, and non-string values are config errors); otherwise it is trusted verbatim and bypasses the server-URL usability gate. Overrides the fallback `servers[].url`. See [Base URL resolution](#base-url-resolution). |
 | `auth` | no | mapping | Global static auth applied to **every** selected operation: `token` emits `Authorization: Bearer <token>`; `headers` emits static name → value pairs. Values support `${ENV_VAR}`. Absent `auth` means no auth headers are sent. See [Auth](#auth). |
 | `payloads` | no | `{ method, path, body }[]` | Per-operation JSON body overrides keyed by normalized `method` + `path`. `body` **replaces** the generated body wholesale (no deep merge). Only `method`, `path`, and `body` are accepted; other keys are config errors. Unmatched overrides warn on stderr. |
 | `output` | no | string | Results JSON path (the JSON file only, never the generated k6 script/data). `--out` overrides it. Default: `specweaver-results.json` in the current working directory. |
 | `load` | no | `{ vus, duration }` | Default load profile. Defaults to `vus: 1`, `duration: 30s`. `--vus` / `--duration` override it. |
 
-### Operations: explicit list or all
+### Operations: selectors
 
-`operations` accepts exactly two forms:
+`operations` accepts either the exact YAML scalar `all` or a non-empty list of
+selector entries. Each entry expands against the loaded catalog:
 
-1. **An explicit non-empty list** of `{ method, path }` entries. Only the listed
-   operations run. Methods are case-insensitive on input and normalized to
-   uppercase; the accepted explicit methods are `GET`, `POST`, `PUT`, `PATCH`,
-   `DELETE`, `HEAD`, and `OPTIONS`. Duplicate entries are config errors. If
-   every listed operation is missing from the loaded spec(s), SpecWeaver exits
-   `2`, lists each unmatched `{ method, path }`, and writes no results file. If
-   only some match, the matching operations still run, each unmatched entry
-   produces a `warning:` on stderr, and the run returns k6's exit code.
-2. **The exact YAML scalar `all`.** It selects every operation catalogued from
-   every configured spec.
+1. **`{ method, path }`** — explicit form. Exact match on the normalized
+   `METHOD path`; methods are case-insensitive on input and normalized to
+   uppercase. Accepted methods are `GET`, `POST`, `PUT`, `PATCH`, `DELETE`,
+   `HEAD`, and `OPTIONS`. Duplicate explicit entries are config errors.
+2. **`{ operationId: "<id>" }`** — exact, case-sensitive match on the
+   operation's `operationId`. Every catalogued operation with that id is
+   selected; duplicates on the same `METHOD path` keep the first occurrence.
+3. **`{ tags: ["<tag>", ...] }`** — non-empty list; selects every operation
+   declaring **any** listed tag (OR semantics, case-sensitive).
+4. **`{ path: "<pattern>" }`** (optionally with `method`) — path pattern: `*`
+   matches exactly one non-empty path segment and `**` matches any characters,
+   including `/`. A trailing `/**` keeps its separator, so
+   `/pets/**` does not match `/pets`. A wildcard-free value matches the exact
+   path, for any method unless `method` is given. Because any `path` containing
+   `*` is a pattern, a literal spec path containing `*` cannot be selected
+   explicitly.
+
+Expansion is deterministic. Each entry expands independently in catalog order
+(spec order as listed in `specs`, then document path order, then canonical
+method order: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`,
+`TRACE`). The final selection is the union in config-entry order, deduplicated
+on `METHOD path` keeping the first occurrence, so overlapping selectors never
+duplicate an operation and repeated runs over identical inputs produce identical
+operation order.
+
+If every configured entry matches nothing, SpecWeaver exits `2` before k6,
+lists each unmatched selector, and writes no results file. If only some match,
+the matching operations still run, each unmatched entry produces a `warning:`
+naming its form (`method path`, `operationId`, `tags`, or `path pattern`), and
+the run returns k6's exit code.
 
 The `all` literal is exact and case-sensitive. `operations: ALL`,
 `operations: All`, `operations: "*"`, `operations: [all]`, and
 `operations: { all: true }` are config errors. Any value that is neither the
-literal `all` nor a valid non-empty `{ method, path }[]` list is rejected with
+literal `all` nor a valid non-empty list of selector entries is rejected with
 an aggregated error naming `operations` and the accepted forms.
 
 With `all`, selection is deterministic: spec order as listed in `specs`, then
@@ -506,9 +529,9 @@ vars are in [`e2e/README.md`](e2e/README.md).
    emit unresolved-variable warnings.
 2. **Load local specs.** Resolve local `$ref`s and catalogue operations under
    `paths`.
-3. **Select operations.** Expand the exact `all` literal deterministically, or
-   match the explicit list. Report duplicate-operation and unmatched-operation
-   warnings; exit `2` when nothing would run.
+3. **Select operations.** Expand the exact `all` literal or the configured
+   selector entries deterministically. Report duplicate-operation and
+   unmatched-selector warnings; exit `2` when nothing would run.
 4. **Emit coverage warnings** for the selected operations (see
    [Coverage warnings](#coverage-warnings)).
 5. **Gate the base URL.** Use an explicit `baseUrl`, or the first usable
@@ -597,9 +620,11 @@ The authoritative limitations live in
 [P3 limitations / non-goals](ROADMAP.md#p3-limitations--non-goals)). Deferred
 means **not available**, not partially supported:
 
-- **Selectors beyond the exact `all` literal are deferred.** `operationId`
-  selectors, tag selectors, wildcard/`*` shorthands, per-operation
-  include/exclude, and tolerant method/path matching are not implemented.
+- **Selectors are additive only.** `operationId`, tags, and path-pattern
+  entries expand independently and cannot be composed into AND/exclude
+  expressions; matching is exact and case-sensitive (no fuzzy matching). A spec
+  path containing a literal `*` cannot be selected explicitly because `*`
+  always means a one-segment pattern.
 - **Non-JSON request bodies are deferred.** Multipart, form-urlencoded, XML, and
   other non-JSON bodies are not generated. A required non-JSON body is sent
   without a body and produces a warning; optional non-JSON bodies are silent.
@@ -715,7 +740,7 @@ npm test          # build + node --test (test/**)
 npm run clean     # remove dist/
 ```
 
-At the time of this README, `npm test` runs **298 tests, 0 failed, 0 skipped**.
+At the time of this README, `npm test` runs **338 tests, 0 failed, 0 skipped**.
 The count grows as tests are added; treat the command's result as authoritative,
 not this number.
 

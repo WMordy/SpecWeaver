@@ -6,14 +6,16 @@
 #   node dist/cli.js --config examples/poc-api/specweaver.warnings.config.yaml --vus 1 --duration 2s
 #
 # `operations: all` with no `auth` selects every operation in openapi.yaml and
-# deliberately exercises the three v1 coverage gaps. Exactly three
+# deliberately exercises the remaining v1 coverage gaps. Exactly two
 # `warning:` lines are expected on stderr (one per gap):
 #
 #   1. GET /admin/stats declares bearer security but no auth is configured, so
 #      the request goes out unauthenticated;
-#   2. GET /recommendations declares a cookie parameter, so it is not sent;
-#   3. POST /pets/{petId}/photo requires a non-JSON (multipart/form-data) body,
+#   2. POST /pets/{petId}/photo requires a non-JSON (multipart/form-data) body,
 #      so SpecWeaver sends it without a body.
+#
+# GET /recommendations declares an optional cookie parameter; it is generated
+# and sent in a Cookie header, so it no longer warns.
 #
 # The run still exits 0. Because /admin/stats is unauthenticated, its response
 # is 401 and its documented-200 k6 check fails; that failure is expected here

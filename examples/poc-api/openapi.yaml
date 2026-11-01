@@ -5,9 +5,10 @@ info:
   description: |
     Deterministic, dependency-free local API intended for SpecWeaver examples
     and the planned live end-to-end test. It is example/test infrastructure, not
-    a production service. The document deliberately includes three v1 coverage-gap surfaces:
-    a cookie parameter, a required non-JSON (multipart) request body, and a
-    bearer security requirement without a configured auth mapping.
+    a production service. The document deliberately includes the v1 coverage-gap
+    surfaces: a required non-JSON (multipart) request body and a bearer security
+    requirement without a configured auth mapping. It also declares an optional
+    cookie parameter that SpecWeaver generates and sends.
 servers:
   - url: http://127.0.0.1:8080
     description: Default local POC API listener

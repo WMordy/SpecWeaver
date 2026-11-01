@@ -2,7 +2,7 @@
  * Coverage-gap warnings for operations SpecWeaver cannot fully model (SPEC-25).
  *
  * A zero-override run derives payloads, parameters, and auth from the OpenAPI
- * document. Three things are deliberately not modelled in v1, and generation
+ * document. Two things are deliberately not modelled in v1, and generation
  * would otherwise omit them silently:
  *
  * 1. **Required non-JSON request bodies** — {@link generateRequestBody} only
@@ -11,14 +11,14 @@
  *    warns exactly when generation would return `undefined` for a required
  *    body, including a required body with an empty or missing `content` map.
  *    Optional non-JSON bodies never warn.
- * 2. **Cookie parameters** — generation skips every `in: "cookie"` parameter
- *    (both required and optional), so each operation with one or more of them
- *    gets exactly one warning naming the parameter(s).
- * 3. **Declared security without configured auth** — auth is a single global
+ * 2. **Declared security without configured auth** — auth is a single global
  *    static value (SPEC-5). If an operation's effective `security` is non-empty
  *    but the resolved auth headers are empty, no auth will be sent; warn once.
  *    An explicit `security: []` never warns, and any configured credential
  *    (including `token: ""`, which still injects a bearer header) suppresses it.
+ *
+ * Cookie parameters are generated and sent (SPEC-35), so they are no longer a
+ * coverage gap and produce no warning.
  *
  * ## Contract
  *
@@ -26,8 +26,8 @@
  * accesses no process globals. It takes the already-selected operations and the
  * already-resolved auth headers, so it is unit-testable in isolation. Messages
  * follow the selected-operation order, and within one operation a fixed kind
- * order: required non-JSON body → cookie parameters → security without auth.
- * Repeated runs over the same inputs therefore produce identical output.
+ * order: required non-JSON body → security without auth. Repeated runs over the
+ * same inputs therefore produce identical output.
  *
  * This is **warn-and-continue**: a gap never skips an operation, never changes
  * the exit code, and never changes generation. The CLI routes these messages
@@ -87,29 +87,6 @@ function requiredNonJsonBodyWarning(
   return `operation "${operationLabel(operation)}" requires a request body but declares no JSON media type (declared: ${declared}); the request will be sent without a body.`;
 }
 
-/** Warn once per operation when any cookie parameter would be skipped (A4). */
-function cookieParameterWarning(
-  operation: OperationEntry,
-): string | undefined {
-  const names = [
-    ...new Set(
-      operation.parameters
-        .filter(
-          (parameter) =>
-            parameter.in === "cookie" && typeof parameter.name === "string",
-        )
-        .map((parameter) => parameter.name),
-    ),
-  ];
-  if (names.length === 0) {
-    return undefined;
-  }
-
-  return `operation "${operationLabel(operation)}" declares cookie parameter(s) ${names
-    .map((name) => `"${name}"`)
-    .join(", ")} that are not generated; the request will be sent without them.`;
-}
-
 /**
  * Warn once when an operation declares security but no auth is configured (A5).
  *
@@ -137,7 +114,7 @@ function securityWithoutAuthWarning(
  * @param authHeaders The headers resolved from the run's validated `auth`
  *   (`resolveAuthHeaders(...).headers`); an empty map means no auth configured.
  * @returns One message per gap per operation, in operation order then fixed kind
- *   order (body → cookies → security). Pure: no I/O, no process access.
+ *   order (body → security). Pure: no I/O, no process access.
  */
 export function buildCoverageWarnings(
   operations: readonly OperationEntry[],
@@ -147,7 +124,6 @@ export function buildCoverageWarnings(
   for (const operation of operations) {
     const warningsForOperation = [
       requiredNonJsonBodyWarning(operation),
-      cookieParameterWarning(operation),
       securityWithoutAuthWarning(operation, authHeaders),
     ];
     for (const warning of warningsForOperation) {

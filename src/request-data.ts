@@ -25,6 +25,14 @@
  * values therefore expand into the documented wire forms rather than being
  * JSON-encoded.
  *
+ * Cookie parameters (SPEC-35) are generated with the same value chain and ride
+ * exactly one `Cookie` request header: `name=value; name2=value2` in parameter
+ * declaration order, with names and values percent-encoded. Array/object values
+ * use the non-exploded `form` wire text (`3,4,5` / `role,admin,...`) before
+ * encoding — a documented deviation from OpenAPI's cookie default of
+ * `explode: true`. An explicit `auth.headers` `Cookie` wins (SPEC-5 collision
+ * precedence), and so does a declared `Cookie` header parameter.
+ *
  * Composed schemas are supported at a practical level: `allOf` members are
  * merged (properties unioned, `required` unioned, scalar keywords overridden
  * by later members), and `oneOf`/`anyOf` pick their first branch. Full
@@ -39,8 +47,8 @@
  * versa) are sealed to a valid range before delegating to faker.
  *
  * Out of scope for v1: non-JSON request bodies (multipart/form-data,
- * application/x-www-form-urlencoded, XML), cookie parameters, auth header
- * injection (SPEC-5), and executing requests.
+ * application/x-www-form-urlencoded, XML), cookie jars / response `Set-Cookie`
+ * handling, auth header injection (SPEC-5), and executing requests.
  *
  * SPEC-13 adds {@link applyPayloadOverrides}: after generation, a configured
  * `payloads[].body` replaces the generated JSON body of the operation whose
@@ -83,8 +91,9 @@ export interface GeneratedRequestData {
   /** Query parameter name -> value, in OpenAPI `form` wire form. */
   query: Record<string, QueryValue>;
   /**
-   * Header name -> value. Values are serialized to strings so SPEC-5 can merge
-   * auth headers into the same map.
+   * Header name -> value, including the generated `Cookie` header (SPEC-35)
+   * when the operation declares cookie parameters. Values are serialized to
+   * strings so SPEC-5 can merge auth headers into the same map.
    */
   headers: Record<string, string>;
   /** Decoded JSON request body, when the operation declares a JSON body. */
@@ -667,7 +676,8 @@ export function generateRequestBody(
 
 /**
  * The OpenAPI default `style` for a parameter location: `form` for query
- * (and cookie) parameters, `simple` for path and header parameters.
+ * parameters, `simple` for path, header, and cookie parameters. Cookie
+ * serialization ignores `style` (see `serializeCookieParameter`).
  */
 function defaultParameterStyle(location: string): string {
   return location === "query" ? "form" : "simple";
@@ -880,12 +890,29 @@ function addQueryEntry(
   query[key] = [existing, value];
 }
 
+/**
+ * Serialize one cookie parameter into a `name=value` pair (SPEC-35).
+ *
+ * `form` is the only style OpenAPI allows for cookie parameters, so the
+ * non-exploded form wire text is used for arrays (`3,4,5`) and objects
+ * (`role,admin,firstName,Alex`) and then percent-encoded as a whole, together
+ * with the name. Encoding the whole serialized value keeps structural
+ * delimiters (`;`, `,`, `=`) from splitting or corrupting the single `Cookie`
+ * header. OpenAPI's cookie default is `explode: true`; treating it as `false` is
+ * a deliberate, documented deviation.
+ */
+function serializeCookieParameter(name: string, value: unknown): string {
+  const wireValue = serializeSimple(value, false);
+  return `${encodeURIComponent(name)}=${encodeURIComponent(wireValue)}`;
+}
+
 /** Generate request data for one operation using an already-seeded faker. */
 function generateWith(operation: OperationEntry, faker: Faker): GeneratedRequestData {
   const pathParams: Record<string, string> = {};
   const preEncodedPathParams: string[] = [];
   const query: Record<string, QueryValue> = {};
   const headers: Record<string, string> = {};
+  const cookies: string[] = [];
 
   for (const parameter of operation.parameters) {
     if (typeof parameter.name !== "string" || typeof parameter.in !== "string") {
@@ -928,10 +955,24 @@ function generateWith(operation: OperationEntry, faker: Faker): GeneratedRequest
           parameterExplode(parameter, parameterStyle(parameter)),
         );
         break;
+      case "cookie":
+        cookies.push(serializeCookieParameter(parameter.name, raw));
+        break;
       default:
-        // Cookie parameters are out of scope for v1.
+        // Unknown parameter locations are not generated.
         break;
     }
+  }
+
+  // All generated cookie parameters ride exactly one `Cookie` header, in
+  // declaration order (SPEC-35). A declared `Cookie` header parameter keeps its
+  // explicit value, and an `auth.headers` `Cookie` wins later through the
+  // existing SPEC-5 collision precedence.
+  if (
+    cookies.length > 0 &&
+    !Object.keys(headers).some((name) => name.toLowerCase() === "cookie")
+  ) {
+    headers.Cookie = cookies.join("; ");
   }
 
   const result: GeneratedRequestData = {

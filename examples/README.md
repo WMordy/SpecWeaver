@@ -46,7 +46,7 @@ See [its README](poc-api/README.md) for routes, seed data, and the request log.
 | [Explicit operations + auth + payload](#explicit-operations--global-auth--payload-override) | [`samples/specweaver.config.yaml`](../samples/specweaver.config.yaml) (reused) | explicit `{method, path}` list, global token and headers, whole-body payload replacement | Common |
 | [Auth from environment variables](#auth-from-environment-variables) | [`configs/auth.from-env.yaml`](configs/auth.from-env.yaml) (new) | `${ENV_VAR}`-only global auth, unresolved-variable warning | Common + `POC_API_TOKEN`, `POC_API_CLIENT` (set run only) |
 | [Multi-spec + explicit `baseUrl`](#multi-spec--explicit-baseurl) | [`configs/multi-spec.baseurl.yaml`](configs/multi-spec.baseurl.yaml) + [`specs/second-resource.openapi.yaml`](specs/second-resource.openapi.yaml) (new) | loading two local specs, selecting operations from both, explicit `baseUrl` | Common |
-| [Coverage warnings](#coverage-warnings) | [`poc-api/specweaver.warnings.config.yaml`](poc-api/specweaver.warnings.config.yaml) (SPEC-27, reused) | all three non-fatal coverage warnings | Common |
+| [Coverage warnings](#coverage-warnings) | [`poc-api/specweaver.warnings.config.yaml`](poc-api/specweaver.warnings.config.yaml) (SPEC-27, reused) | both non-fatal coverage warnings | Common |
 | [POC canonical run](#poc-canonical-run) | [`poc-api/specweaver.config.yaml`](poc-api/specweaver.config.yaml) + [`poc-api/openapi.yaml`](poc-api/openapi.yaml) (SPEC-27, reused) | live target, explicit operations, token, payload override, request logging | Common |
 
 ## Zero-override `operations: all`
@@ -262,8 +262,11 @@ do not edit the sample.
 - **Path:** [`poc-api/specweaver.warnings.config.yaml`](poc-api/specweaver.warnings.config.yaml)
   with [`poc-api/openapi.yaml`](poc-api/openapi.yaml). This is SPEC-27's config,
   reused and linked, not copied.
-- **Teaches:** all three non-fatal v1 coverage warnings. `operations: all` with
-  no auth selects every operation, including the three deliberate gap surfaces.
+- **Teaches:** the remaining non-fatal v1 coverage warnings. `operations: all`
+  with no auth selects every operation, including the deliberate gap surfaces
+  (unauthenticated `GET /admin/stats` and the required multipart
+  `POST /pets/{petId}/photo`). `GET /recommendations` declares a cookie
+  parameter; it is generated and sent, so it produces no warning.
 - **Prerequisites:** common prerequisites and a running POC API.
 - **Command (repository root):**
 
@@ -272,11 +275,10 @@ do not edit the sample.
     --vus 1 --duration 2s --out /tmp/specweaver-examples/warnings.json
   ```
 
-- **Expected stderr, exactly three lines in this order:**
+- **Expected stderr, exactly two lines in this order:**
 
   ```text
   warning: operation "GET /admin/stats" declares security but no auth is configured; the request will be sent without authentication.
-  warning: operation "GET /recommendations" declares cookie parameter(s) "session" that are not generated; the request will be sent without them.
   warning: operation "POST /pets/{petId}/photo" requires a request body but declares no JSON media type (declared: "multipart/form-data"); the request will be sent without a body.
   ```
 
@@ -364,8 +366,8 @@ Every shipped feature has at least one runnable example.
 | Whole-body `payloads` override | [Explicit operations + auth + payload](#explicit-operations--global-auth--payload-override) |
 | Multiple local `specs` | [Multi-spec + explicit `baseUrl`](#multi-spec--explicit-baseurl) |
 | Explicit `baseUrl` | [Multi-spec + explicit `baseUrl`](#multi-spec--explicit-baseurl) |
+| Generated `Cookie` header from cookie parameters | [Zero-override](#zero-override-operations-all), [Coverage warnings](#coverage-warnings) |
 | Warning: security without configured auth | [Coverage warnings](#coverage-warnings) |
-| Warning: cookie parameter not generated | [Coverage warnings](#coverage-warnings) |
 | Warning: required non-JSON body not generated | [Coverage warnings](#coverage-warnings) |
 | Machine-readable results file with per-operation checks | All examples (paths above) |
 | CI / command usage | [CI and command snippet](#ci-and-command-snippet) |
@@ -446,15 +448,15 @@ NODE
 
 Shipped and demonstrated here: `operations: all`, explicit operation lists,
 global static token/headers auth with `${ENV_VAR}` resolution, whole-body payload
-overrides, multiple local specs, explicit `baseUrl`, the three non-fatal coverage
-warnings, and the results JSON. The README also documents the shipped
-`operationId`, `tags`, and path-pattern selector entries; the gallery keeps its
-examples on explicit lists.
+overrides, multiple local specs, explicit `baseUrl`, cookie parameter generation
+(the POC spec's optional `session` cookie is generated and sent), the remaining
+non-fatal coverage warnings, and the results JSON. The README also documents the
+shipped `operationId`, `tags`, and path-pattern selector entries; the gallery
+keeps its examples on explicit lists.
 
 Deferred and **not** demonstrated or claimed: tolerant/fuzzy method/path
 matching, non-JSON (multipart/form-data, form-urlencoded, XML) body generation,
-cookie support, `securitySchemes`-derived auth, per-operation auth, and remote
-`http(s)` specs.
+`securitySchemes`-derived auth, per-operation auth, and remote `http(s)` specs.
 
 See the roadmap for the authoritative limitations:
 

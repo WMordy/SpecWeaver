@@ -245,6 +245,27 @@ test("serializes headers, including injected auth headers, unchanged", () => {
   );
 });
 
+test("emits the generated Cookie header into the companion data (SPEC-35)", () => {
+  const generated = generateRequestData({
+    method: "GET",
+    path: "/recommendations",
+    parameters: [
+      { name: "session", in: "cookie", example: "s 1" },
+      { name: "theme", in: "cookie", example: "dark" },
+    ],
+    security: [],
+  });
+
+  const { script, data } = emitScript({
+    config: config(),
+    requests: [generated],
+  });
+
+  assert.equal(data.operations[0].headers.Cookie, "session=s%201; theme=dark");
+  // The header map is wired into the k6 request unchanged.
+  assert.match(script, /const params = \{ headers: operation\.headers \};/);
+});
+
 test("serializes a JSON body when present and omits it otherwise", () => {
   const withBody = emitScript({
     config: config(),

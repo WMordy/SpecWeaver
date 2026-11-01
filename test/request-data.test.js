@@ -68,15 +68,125 @@ test("carries the operation's method and path", () => {
   assert.equal(data.path, "/pets/{id}");
 });
 
-test("omits cookie parameters (out of scope for v1)", () => {
+test("generates cookie parameters into exactly one Cookie header, in declaration order", () => {
   const data = generateRequestData(
     operation({
-      parameters: [{ name: "session", in: "cookie", schema: { type: "string" } }],
+      parameters: [
+        {
+          name: "session",
+          in: "cookie",
+          required: true,
+          schema: { type: "string", format: "uuid" },
+        },
+        { name: "theme", in: "cookie", example: "dark" },
+        { name: "limit", in: "query", schema: { type: "integer" } },
+      ],
     }),
   );
-  assert.deepEqual(data.query, {});
-  assert.deepEqual(data.headers, {});
+
+  const pairs = data.headers.Cookie.split("; ");
+  assert.equal(pairs.length, 2, data.headers.Cookie);
+  assert.match(pairs[0], /^session=[0-9a-f]{8}-[0-9a-f]{4}-/i);
+  assert.equal(pairs[1], "theme=dark");
+  // Cookie parameters never leak into the query string or other maps.
+  assert.deepEqual(Object.keys(data.query), ["limit"]);
+  assert.deepEqual(Object.keys(data.headers), ["Cookie"]);
   assert.deepEqual(data.pathParams, {});
+});
+
+test("cookie values use the same example -> default -> faker chain as other parameters", () => {
+  const data = generateRequestData(
+    operation({
+      parameters: [
+        {
+          name: "fromParam",
+          in: "cookie",
+          example: "p",
+          schema: { type: "string", default: "d" },
+        },
+        { name: "fromDefault", in: "cookie", schema: { type: "string", default: "dflt" } },
+        { name: "fromFaker", in: "cookie", schema: { type: "string", format: "uuid" } },
+      ],
+    }),
+  );
+
+  const pairs = data.headers.Cookie.split("; ");
+  assert.deepEqual(pairs.slice(0, 2), ["fromParam=p", "fromDefault=dflt"]);
+  assert.match(pairs[2], /^fromFaker=[0-9a-f-]{36}$/i);
+});
+
+test("cookie generation is reproducible for a given seed", () => {
+  const make = () =>
+    generateRequestData(
+      operation({
+        parameters: [
+          { name: "session", in: "cookie", schema: { type: "string", format: "uuid" } },
+          { name: "theme", in: "cookie", schema: { type: "string" } },
+        ],
+      }),
+    );
+
+  assert.equal(make().headers.Cookie, make().headers.Cookie);
+  assert.notEqual(
+    generateRequestData(
+      operation({
+        parameters: [
+          { name: "session", in: "cookie", schema: { type: "string", format: "uuid" } },
+        ],
+      }),
+      { seed: DEFAULT_SEED + 1 },
+    ).headers.Cookie,
+    make().headers.Cookie,
+  );
+});
+
+test("cookie names and values are percent-encoded", () => {
+  const data = generateRequestData(
+    operation({
+      parameters: [{ name: "session id", in: "cookie", example: "a b;c=d" }],
+    }),
+  );
+
+  assert.equal(data.headers.Cookie, "session%20id=a%20b%3Bc%3Dd");
+});
+
+test("array and object cookie values serialize non-exploded before encoding", () => {
+  const data = generateRequestData(
+    operation({
+      parameters: [
+        {
+          name: "ids",
+          in: "cookie",
+          example: [3, 4, 5],
+          schema: { type: "array", items: { type: "integer" } },
+        },
+        {
+          name: "prefs",
+          in: "cookie",
+          example: { role: "admin", firstName: "Alex" },
+          schema: { type: "object" },
+        },
+      ],
+    }),
+  );
+
+  assert.equal(
+    data.headers.Cookie,
+    "ids=3%2C4%2C5; prefs=role%2Cadmin%2CfirstName%2CAlex",
+  );
+});
+
+test("an explicit Cookie header parameter keeps its value over generated cookies", () => {
+  const data = generateRequestData(
+    operation({
+      parameters: [
+        { name: "session", in: "cookie", example: "s1" },
+        { name: "Cookie", in: "header", example: "raw=1" },
+      ],
+    }),
+  );
+
+  assert.deepEqual(data.headers, { Cookie: "raw=1" });
 });
 
 test("generates a JSON request body for an operation", () => {

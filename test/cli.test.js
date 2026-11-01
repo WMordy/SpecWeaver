@@ -1210,7 +1210,7 @@ test("built CLI base-URL failure is deterministic across repeated runs", () => {
 
 // --- SPEC-25: coverage-gap warnings ---------------------------------------
 
-/** Paths exercising all three coverage gaps (body, cookie, security). */
+/** Paths exercising the remaining coverage gaps (body, security) and a cookie parameter that must not warn. */
 function coverageGapPaths() {
   return {
     "/pets": {
@@ -1239,9 +1239,7 @@ function coverageWarningLines(stderr) {
     .filter(
       (line) =>
         line.startsWith("warning: operation ") &&
-        /(requires a request body|declares cookie parameter|declares security)/.test(
-          line,
-        ),
+        /(requires a request body|declares security)/.test(line),
     );
 }
 
@@ -1259,19 +1257,30 @@ test("built CLI warns about every coverage gap once and still runs", () => {
   assert.equal(existsSync(run.resultsPath), true, "results file should exist");
 
   const lines = coverageWarningLines(run.result.stderr);
-  assert.equal(lines.length, 3, run.result.stderr);
+  assert.equal(lines.length, 2, run.result.stderr);
   assert.match(
     lines[0],
-    /^warning: operation "GET \/pets" declares cookie parameter\(s\) "session"/,
-  );
-  assert.match(
-    lines[1],
     /^warning: operation "GET \/pets" declares security but no auth is configured/,
   );
   assert.match(
-    lines[2],
+    lines[1],
     /^warning: operation "POST \/pets" requires a request body but declares no JSON media type \(declared: "application\/xml"\)/,
   );
+  // Cookie parameters are generated (SPEC-35), so they produce no warning.
+  assert.doesNotMatch(run.result.stderr, /cookie parameter/);
+
+  // The generated cookie parameter rides exactly one Cookie header.
+  const generated = run.result.stdout.match(/^Generated k6 script: (.+)$/m);
+  assert.ok(generated, `expected a generated-script path:\n${run.result.stdout}`);
+  const dataPath = join(
+    dirname(generated[1].trim()),
+    "specweaver.data.json",
+  );
+  const data = JSON.parse(readFileSync(dataPath, "utf8"));
+  const pets = data.operations.find(
+    (operation) => operation.method === "GET" && operation.route === "/pets",
+  );
+  assert.match(pets.headers.Cookie, /^session=[^;]+$/);
 
   // Non-fatal: the operations still ran and are recorded in the results JSON.
   const results = JSON.parse(readFileSync(run.resultsPath, "utf8"));
@@ -1318,10 +1327,10 @@ test("a configured token, including an empty one, suppresses only the auth warni
 
   assert.equal(run.result.status, EXIT_SUCCESS, run.result.stderr);
   const lines = coverageWarningLines(run.result.stderr);
-  assert.equal(lines.length, 2, run.result.stderr);
-  assert.match(lines[0], /declares cookie parameter/);
-  assert.match(lines[1], /requires a request body/);
+  assert.equal(lines.length, 1, run.result.stderr);
+  assert.match(lines[0], /requires a request body/);
   assert.doesNotMatch(run.result.stderr, /declares security/);
+  assert.doesNotMatch(run.result.stderr, /cookie parameter/);
 });
 
 test("coverage warnings are printed before the base-URL gate aborts the run", () => {
@@ -1345,7 +1354,7 @@ test("coverage warnings are printed before the base-URL gate aborts the run", ()
   const lines = coverageWarningLines(run.result.stderr);
   assert.deepEqual(
     lines.map((line) => line.match(/operation "([^"]+)"/)?.[1]),
-    ["GET /pets", "GET /pets", "POST /pets"],
+    ["GET /pets", "POST /pets"],
   );
 });
 

@@ -15,9 +15,11 @@ complete and committed. The P2 zero-override milestone remains complete.
 P4 (SPEC-33…41) covers the capabilities deferred by P2/P3: base-URL fallback
 breadth, `label`/`matrix` path styles, cookies, selectors beyond `all`, OpenAPI
 3.1 `webhooks`, non-JSON bodies, `securitySchemes`-derived and per-operation
-auth, and remote specs. SPEC-33, SPEC-34, and SPEC-36 are done (the latter two
-ship `label`/`matrix` path styles and the `operationId`, tags, and path-pattern
-selectors); the remaining five are `todo` skeletons.
+auth, and remote specs. SPEC-33, SPEC-34, and SPEC-36 are done and SPEC-35 is
+implemented and in review. Together they ship the first-usable base-URL
+fallback, `label`/`matrix` path styles, generated and sent cookie parameters, and
+the `operationId`, tags, and path-pattern selectors. The remaining five are
+`todo` skeletons.
 
 P0 (correctness and trust) and P1 (proof it works) are both closed and
 committed on `master`. The P0 commits are:
@@ -75,8 +77,9 @@ P3 (SPEC-27…32) is complete. All P3 tickets are `done` and committed. P3 added
 surface and proof: a dependency-free POC API and runnable examples gallery
 (SPEC-27/28), a real-k6 live end-to-end test wired into CI (SPEC-29), a README
 overhaul (SPEC-30), and `AGENTS.md` onboarding (SPEC-31). It adds no new product
-features; selectors beyond `all`, non-JSON bodies, cookies, auth derivation, and
-remote specs remain deferred.
+features; selectors beyond `all`, non-JSON bodies, auth derivation, and
+remote specs remain deferred (cookies were deferred at P3 time and shipped later
+in SPEC-35).
 
 P3 commits on `master`:
 
@@ -236,20 +239,25 @@ Dependencies (resolved):
    `payloads` override (whole-body replacement) → explicit example/examples →
    schema `default` → faker by `type`/`format`; required and optional fields are
    always generated. This is now the README's documented behavior, not a plan.
-3. **Broader body/auth support — deferred (warn-only).** Non-JSON bodies
-   (multipart, form-urlencoded, XML), cookie parameters, security-scheme-derived
-   auth, and per-operation auth are not implemented. Non-JSON required bodies,
-   cookie parameters, and security without configured auth are surfaced by
-   SPEC-25 warnings; security-scheme-derived and per-operation auth remain
-   unimplemented without a dedicated warning.
+3. **Broader body/auth support — partially delivered.** Non-JSON bodies
+   (multipart, form-urlencoded, XML), security-scheme-derived auth, and
+   per-operation auth are still not implemented. Non-JSON required bodies and
+   security without configured auth are surfaced by SPEC-25 warnings;
+   security-scheme-derived and per-operation auth remain unimplemented without a
+   dedicated warning. Cookie parameters, deferred at P2 close, are generated and
+   sent since SPEC-35.
 
 #### P2 limitations
 
 - **Non-JSON request bodies** are not generated. A required non-JSON body is
   sent without a body and produces a `warning:`; optional non-JSON bodies are
   silent.
-- **Cookie parameters** (`in: cookie`) are not generated or sent; each operation
-  with one warns once.
+- **Cookie parameters were not generated or sent (fixed by SPEC-35).** They are
+  now generated through the same example → `default` → faker chain (required and
+  optional alike) and sent in exactly one percent-encoded `Cookie` header, in
+  declaration order. Array/object values serialize non-exploded (`explode`
+  treated as `false`, a documented deviation from OpenAPI's cookie default);
+  `auth.headers` `Cookie` wins; no warning is emitted.
 - **Auth gaps are warn-only.** Auth is a single global static token/headers
   value. An operation with non-empty `security` and no configured auth runs
   without authentication and warns; there is no `securitySchemes` mapping and no
@@ -276,8 +284,8 @@ P3 is complete and committed as SPEC-27…32. The phase had two outcomes: make
 the shipped tool easy to evaluate and adopt (POC API, runnable examples, README,
 AGENTS.md), and prove the real pipeline in CI by running the built CLI with real
 k6 against the checked-in POC API. P3 adds no new product capabilities;
-selectors beyond `all`, non-JSON bodies, cookies, and auth derivation remain
-deferred.
+selectors beyond `all`, non-JSON bodies, and auth derivation remain deferred
+(cookies were deferred at P3 time and shipped later in SPEC-35).
 
 | Order | Key | Ticket ID | Priority | Status | Title |
 |---|---|---|---|---|---|
@@ -359,9 +367,10 @@ Claim → evidence → result:
 
 #### P3 limitations / non-goals
 
-- No new product features. Selectors beyond `all`, non-JSON bodies, cookies,
+- No new product features. Selectors beyond `all`, non-JSON bodies,
   `securitySchemes`-derived auth, per-operation auth, and remote specs remain
   deferred and are documented as such in the README and examples gallery.
+  Cookies were also deferred at P3 time; they shipped later in SPEC-35.
 - The live e2e is a functional smoke test against a local, in-memory POC API;
   it is not a performance, capacity, or SLA test, and it does not call public
   internet APIs.
@@ -394,16 +403,17 @@ Claim → evidence → result:
 ### P4 — deferred capability expansion (in progress)
 
 P4 is in progress. Nine skeleton tickets were seeded on 2026-10-24 from a
-roadmap-vs-implementation gap review. SPEC-33 and SPEC-34 are done; the
-remaining six are `todo` and await planner elaboration. The order below is
-the work order; do not reorder it without updating this file. Each ticket must
-be planned before implementation, and docs must describe shipped behavior only.
+roadmap-vs-implementation gap review. SPEC-33, SPEC-34, and SPEC-36 are done and
+SPEC-35 is in review; the remaining five are `todo` and await planner
+elaboration. The order below is the work order; do not reorder it without
+updating this file. Each ticket must be planned before implementation, and docs
+must describe shipped behavior only.
 
 | Order | Key | Ticket ID | Priority | Status | Title |
 |---|---|---|---|---|---|
 | 1 | SPEC-33 | `01M5QTK2DF4M4R8BTX6RV905FS` | medium | done | Accept the first usable `servers[]` URL as the base-URL fallback |
 | 2 | SPEC-34 | `01M5QTK52K557BCDRTKWV0N6PS` | low | done | Implement `label` and `matrix` path parameter styles |
-| 3 | SPEC-35 | `01M5QTK8711DW0S5BFN0M78R1D` | medium | todo | Generate and send cookie parameters |
+| 3 | SPEC-35 | `01M5QTK8711DW0S5BFN0M78R1D` | medium | in review | Generate and send cookie parameters |
 | 4 | SPEC-36 | `01M5QTKB3GR8JAST4FF8Q35VQN` | high | done | Support operation selectors beyond the `all` literal |
 | 5 | SPEC-37 | `01M5QTKE0SXC7BY1KX6WTCQGRT` | medium | todo | Catalogue OpenAPI 3.1 `webhooks` |
 | 6 | SPEC-38 | `01M5QTKGSG573T640BKBVJJ8Q5` | high | todo | Generate non-JSON request bodies |
@@ -431,6 +441,16 @@ Decisions and resolved behavior:
   percent-encoded; URL composition substitutes these pre-encoded values verbatim
   and keeps encoding raw `simple` path values as before. Unknown path styles
   still fall back to `simple` without a new warning.
+- SPEC-35 (in review) generates every declared `in: cookie` parameter through the
+  same seeded example → `default` → faker chain (required and optional alike) and
+  sends them in exactly one `Cookie` request header: `name=value` pairs joined by
+  `"; "` in declaration order, with names and values percent-encoded. Array and
+  object values serialize non-exploded (`explode` treated as `false`) — a
+  documented deviation from OpenAPI's cookie default. `auth.headers` `Cookie`
+  wins case-insensitively (existing collision precedence). The per-operation
+  cookie coverage warning and its classifier were removed; non-JSON-body and
+  security warnings are unchanged. Cookie jars, `Set-Cookie` handling, and
+  cross-request cookie reuse remain out of scope.
 - SPEC-36 (done) adds three additive selector forms next to `all` and
   explicit `{ method, path }`: exact `{ operationId }`, `{ tags }` with
   case-sensitive OR semantics, and `{ path }` patterns (`*` = one non-empty
@@ -548,3 +568,14 @@ unless the product owner reopens them. Do not create tickets for them here.
   `OperationEntry` records operation-level `tags`. README/AGENTS/examples
   limitations no longer claim selectors are deferred. `npm run build` clean;
   `npm test` 338/338 passing (16 new/updated selector, catalog, and CLI tests).
+- 2026-11-01: SPEC-35 implemented (in review): `in: cookie` parameters are
+  generated through the same seeded example → `default` → faker chain and sent
+  in one percent-encoded `Cookie` header (`name=value; name2=value2`, declaration
+  order; array/object values non-exploded, a documented deviation from OpenAPI's
+  cookie default). `auth.headers` `Cookie` wins case-insensitively, and an
+  explicit `Cookie` header parameter is preserved. The cookie coverage warning
+  and its classifier were removed from `src/coverage.ts`; the non-JSON-body and
+  security warnings are unchanged. README, ROADMAP, AGENTS.md, and the examples
+  gallery no longer list cookies as deferred. `npm run build` clean; `npm test`
+  344/344 passing, 0 failed, 0 skipped. P4 remains open; the other five tickets
+  are untouched.

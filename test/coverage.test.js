@@ -77,30 +77,15 @@ test("optional non-JSON bodies and JSON bodies (including +json) do not warn", (
   }
 });
 
-test("cookie parameters warn once per operation naming every cookie name", () => {
-  const warnings = warningsFor({
-    method: "GET",
-    path: "/pets",
-    parameters: [
-      { name: "session", in: "cookie", required: true },
-      { name: "theme", in: "cookie" },
-      { name: "limit", in: "query" },
-    ],
-  });
-
-  assert.equal(warnings.length, 1, JSON.stringify(warnings));
-  assert.match(warnings[0], /^operation "GET \/pets" declares cookie parameter/);
-  assert.ok(warnings[0].includes('"session", "theme"'), warnings[0]);
-  assert.doesNotMatch(warnings[0], /limit/);
-});
-
-test("operations without cookie parameters do not warn", () => {
+test("cookie parameters are generated and no longer warn (SPEC-35)", () => {
   assert.deepEqual(
     warningsFor({
+      method: "GET",
+      path: "/pets",
       parameters: [
+        { name: "session", in: "cookie", required: true },
+        { name: "theme", in: "cookie" },
         { name: "limit", in: "query" },
-        { name: "id", in: "path" },
-        { name: "X-Trace", in: "header" },
       ],
     }),
     [],
@@ -144,7 +129,7 @@ test("any configured token (including an empty one) or header suppresses the aut
   }
 });
 
-test("warnings follow operation order and body -> cookies -> security within an operation", () => {
+test("warnings follow operation order and body -> security within an operation", () => {
   const operations = [
     operation({
       method: "POST",
@@ -161,11 +146,10 @@ test("warnings follow operation order and body -> cookies -> security within an 
   ];
 
   const warnings = buildCoverageWarnings(operations, {});
-  assert.equal(warnings.length, 4, JSON.stringify(warnings));
+  assert.equal(warnings.length, 3, JSON.stringify(warnings));
   assert.match(warnings[0], /^operation "POST \/first" requires a request body/);
-  assert.match(warnings[1], /^operation "POST \/first" declares cookie parameter/);
-  assert.match(warnings[2], /^operation "POST \/first" declares security/);
-  assert.match(warnings[3], /^operation "GET \/second" declares security/);
+  assert.match(warnings[1], /^operation "POST \/first" declares security/);
+  assert.match(warnings[2], /^operation "GET \/second" declares security/);
 
   // Repeated calls over the same inputs are identical.
   assert.deepEqual(buildCoverageWarnings(operations, {}), warnings);

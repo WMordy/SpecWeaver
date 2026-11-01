@@ -50,18 +50,18 @@ available in v1 and link to the matching limitation in
 | OpenAPI 3.0/3.1 local specs (JSON or YAML) | Shipped | Local `$ref` resolution; remote `http(s)` specs are not fetched. |
 | Selector entries: `{ method, path }`, `{ operationId }`, `{ tags }`, `{ path }` patterns | Shipped | Additive forms; deterministic union expansion with `METHOD path` dedupe. |
 | Whole-catalog selector `operations: all` | Shipped | Exact, case-sensitive literal; deterministic expansion. |
-| Derived request data | Shipped | Path/query/header parameters and JSON bodies; path parameters honor `simple`, `label`, and `matrix` styles with `explode`; explicit example/examples → `default` → faker; required and optional fields generated. |
+| Derived request data | Shipped | Path/query/header/cookie parameters and JSON bodies; path parameters honor `simple`, `label`, and `matrix` styles with `explode`; explicit example/examples → `default` → faker; required and optional fields generated. |
 | Whole-body `payloads` overrides | Shipped | Replaces the generated JSON body for the matching operation. |
 | Global static auth | Shipped | Bearer `token` and/or static `headers`; `${ENV_VAR}` references; never derived from `security`. |
 | Base URL resolution | Shipped | Explicit `baseUrl` wins; otherwise the first usable `servers[].url`, with server-variable defaults substituted and unusable entries skipped with a warning. |
-| Non-fatal coverage warnings | Shipped | Non-JSON required body, cookie parameters, security without configured auth. |
+| Non-fatal coverage warnings | Shipped | Non-JSON required body, security without configured auth. |
 | Dependency-free k6 script emission | Shipped | k6 built-ins and plain JavaScript only. |
 | Real k6 execution and streaming output | Shipped | k6 must be on `PATH`; SpecWeaver never installs it. |
 | Results JSON, console summary, per-operation checks | Shipped | Documented-2xx requests pass; everything else fails. |
 | Opt-in `--fail-on-check-failure` gate | Shipped | Check failures are informational by default. |
 | CLI `--vus` / `--duration` / `--out` overrides | Shipped | Override the corresponding YAML values. |
 | Non-JSON body generation (XML, multipart, form-urlencoded) | Deferred | See [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
-| Cookie parameters | Deferred | See [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
+| Cookie parameters | Shipped | `in: cookie` parameters are generated and sent in one percent-encoded `Cookie` header; array/object values serialize non-exploded (OpenAPI's cookie default is `explode: true`). No cookie jar or `Set-Cookie` handling. |
 | `securitySchemes`-derived auth | Deferred | See [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
 | Per-operation auth | Deferred | See [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
 | Remote `http(s)` specs | Deferred | See [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
@@ -139,7 +139,7 @@ Highlights:
 | [Explicit operations + auth + payload](examples/README.md#explicit-operations--global-auth--payload-override) | An explicit operation list, a global bearer token plus headers, and a whole-body payload override. |
 | [Auth from environment variables](examples/README.md#auth-from-environment-variables) | `${ENV_VAR}`-only auth and the non-fatal unresolved-variable warning. |
 | [Multi-spec + explicit `baseUrl`](examples/README.md#multi-spec--explicit-baseurl) | Two local specs in one run, with an explicit base URL. |
-| [Coverage warnings](examples/README.md#coverage-warnings) | All three non-fatal warning classes in one run. |
+| [Coverage warnings](examples/README.md#coverage-warnings) | Both non-fatal warning classes in one run. |
 | [POC canonical run](examples/README.md#poc-canonical-run) | The happy-path config used by the quick start. |
 
 The gallery also includes a copy-pasteable CI snippet and a feature-to-example
@@ -299,6 +299,20 @@ method (so `get /pets` and `GET /pets` are equivalent) and keys on `method` +
 `path`. An override supplies a body even when the operation had no generated
 JSON body. An override that matches no selected operation warns on stderr and
 does not fail the run. `payloads` are applied before auth injection.
+
+Cookie parameters (`in: cookie`) are generated with the same
+example → `default` → faker chain, required and optional alike, and sent in
+exactly one `Cookie` request header: `name=value; name2=value2` pairs in
+parameter declaration order, with names and values percent-encoded. Array and
+object values serialize non-exploded (form style, `explode` treated as `false`)
+— a deliberate deviation from OpenAPI's cookie default of `explode: true`. A
+cookie parameter's own `style`/`explode` is ignored and produces no warning. A
+`Cookie` value configured in `auth.headers` wins over generated cookies
+(case-insensitively), matching the auth collision precedence, and a declared
+`Cookie` header parameter likewise suppresses the generated pairs. There is no
+cookie jar: response `Set-Cookie` headers are ignored, so response-driven session
+state is not tracked. Like every other generated header, the cookie pairs are
+computed once at script generation and sent unchanged on every iteration.
 
 ### Base URL resolution
 
@@ -537,7 +551,7 @@ vars are in [`e2e/README.md`](e2e/README.md).
 5. **Gate the base URL.** Use an explicit `baseUrl`, or the first usable
    `servers[].url`; exit `2` before k6 when neither works.
 6. **Preflight k6.** Resolve `k6` on `PATH`; a missing binary exits `2`.
-7. **Generate request data.** Build path/query/header parameters and JSON
+7. **Generate request data.** Build path/query/header/cookie parameters and JSON
    bodies, apply `payloads` overrides, then inject global auth.
 8. **Emit the k6 script and companion data** into a unique temporary directory.
    The script uses k6 built-ins and plain JavaScript only.
@@ -587,18 +601,17 @@ recorded checks only.
 
 ## Coverage warnings
 
-v1 cannot fully model three things. Rather than omit them silently, SpecWeaver
+v1 cannot fully model two things. Rather than omit them silently, SpecWeaver
 emits one non-fatal warning per gap per selected operation:
 
 - a **required request body with no JSON media type** (e.g.
   `application/xml` or `multipart/form-data`), which is sent without a body;
-- **`in: cookie` parameters**, which are not generated or sent;
 - **non-empty `security` with no configured `auth`**, which is sent without
   authentication.
 
 Warnings are `warning:`-prefixed lines on **stderr**, naming `METHOD path` and
 the concrete gap. They are deduped, deterministic (selected-operation order,
-then body → cookie → security within an operation), and emitted after operation
+then body → security within an operation), and emitted after operation
 selection but before the k6 preflight, so they still appear when a run later
 aborts at the base-URL gate or at k6 preflight. They never change the exit code,
 never skip an operation, and are never written into the results JSON. The
@@ -607,7 +620,7 @@ for its selected operations that an `all` run reports across the catalog.
 
 The
 [`examples/poc-api/specweaver.warnings.config.yaml`](examples/poc-api/specweaver.warnings.config.yaml)
-config demonstrates all three in one run. Because the unauthenticated
+config demonstrates both in one run. Because the unauthenticated
 `GET /admin/stats` returns `401` while the operation documents `200`, its
 informational check fails; the run still exits `0`. The warning demo does not
 hide that real outcome.
@@ -628,8 +641,6 @@ means **not available**, not partially supported:
 - **Non-JSON request bodies are deferred.** Multipart, form-urlencoded, XML, and
   other non-JSON bodies are not generated. A required non-JSON body is sent
   without a body and produces a warning; optional non-JSON bodies are silent.
-- **Cookie parameters are deferred.** `in: cookie` parameters are not generated
-  or sent; each operation with one warns once.
 - **`securitySchemes`-derived auth is deferred.** Auth is a single global static
   token/headers value; the tool never derives credentials from the spec.
 - **Per-operation auth is deferred.** Configured auth is global to the run.
@@ -645,8 +656,8 @@ means **not available**, not partially supported:
   are emitted on that error path.
 - **An explicit `baseUrl` is trusted verbatim** once it is a non-empty string;
   it bypasses the server-URL usability gate.
-- **Warnings are warn-only.** Auth gaps, cookies, and non-JSON bodies are
-  surfaced, not repaired.
+- **Warnings are warn-only.** Auth gaps and non-JSON bodies are surfaced, not
+  repaired.
 - **The live e2e is a functional smoke test**, not a performance, capacity, or
   SLA benchmark. The POC API is checked-in example/test infrastructure, not a
   supported production service.

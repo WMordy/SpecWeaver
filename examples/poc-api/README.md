@@ -17,9 +17,9 @@ All commands below are meant to be run **from the repository root**
 | File | Purpose |
 |---|---|
 | `server.js` | Node 22 built-in `http` server, in-memory seed data, request logging, graceful shutdown. |
-| `openapi.yaml` | OpenAPI 3.0.3 document for all nine operations, including the three v1 coverage-gap surfaces. |
+| `openapi.yaml` | OpenAPI 3.0.3 document for all nine operations, including the v1 coverage-gap surfaces and an optional cookie parameter. |
 | `specweaver.config.yaml` | Canonical happy-path run: explicit operations, static `POC-TOKEN`, `POST /pets` payload override, no `baseUrl`. |
-| `specweaver.warnings.config.yaml` | `operations: all` with no auth to demonstrate exactly three coverage warnings. |
+| `specweaver.warnings.config.yaml` | `operations: all` with no auth to demonstrate the remaining coverage warnings. |
 | `README.md` | This file. |
 
 ## Start the server
@@ -146,16 +146,19 @@ operations, sends `Authorization: Bearer POC-TOKEN`, omits `baseUrl` so the
 spec's absolute `http://127.0.0.1:8080` server URL is used, and replaces the
 `POST /pets` body with `{"name":"PocOverridePet","tag":"override","age":4}`.
 
-## Coverage warnings (expected P3 limitations)
+## Coverage warnings (expected limitations)
 
 The warnings config selects every operation with no auth. It exits `0` but emits
-exactly these three `warning:` lines on stderr (order follows the spec):
+exactly these two `warning:` lines on stderr (order follows the spec):
 
 ```text
 warning: operation "GET /admin/stats" declares security but no auth is configured; the request will be sent without authentication.
-warning: operation "GET /recommendations" declares cookie parameter(s) "session" that are not generated; the request will be sent without them.
 warning: operation "POST /pets/{petId}/photo" requires a request body but declares no JSON media type (declared: "multipart/form-data"); the request will be sent without a body.
 ```
+
+`GET /recommendations` declares an optional `session` cookie parameter; it is
+generated and sent in a `Cookie` header, so it produces no warning. The POC
+server deliberately ignores cookies.
 
 Run it with:
 

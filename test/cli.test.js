@@ -1220,7 +1220,7 @@ function coverageGapPaths() {
         ...apiOperation(),
         requestBody: {
           required: true,
-          content: { "application/xml": { schema: { type: "object" } } },
+          content: { "text/csv": { schema: { type: "object" } } },
         },
       },
     },
@@ -1259,7 +1259,7 @@ test("built CLI warns about every coverage gap once and still runs", () => {
   );
   assert.match(
     lines[1],
-    /^warning: operation "POST \/pets" requires a request body but declares no JSON media type \(declared: "application\/xml"\)/,
+    /^warning: operation "POST \/pets" requires a request body but declares none of the supported media types.*\(declared: "text\/csv"\)/,
   );
   // Cookie parameters are generated (SPEC-35), so they produce no warning.
   assert.doesNotMatch(run.result.stderr, /cookie parameter/);

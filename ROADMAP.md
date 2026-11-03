@@ -15,11 +15,12 @@ complete and committed. The P2 zero-override milestone remains complete.
 P4 (SPEC-33…41) covers the capabilities deferred by P2/P3: base-URL fallback
 breadth, `label`/`matrix` path styles, cookies, selectors beyond `all`, OpenAPI
 3.1 `webhooks`, non-JSON bodies, `securitySchemes`-derived and per-operation
-auth, and remote specs. SPEC-33, SPEC-34, SPEC-35, and SPEC-36 are done
-(committed on `master`); SPEC-37 is in progress. Together they ship the
+auth, and remote specs. SPEC-33, SPEC-34, SPEC-35, SPEC-36, and SPEC-37 are
+done and committed on `master`; SPEC-38 is in progress. Together they ship the
 first-usable base-URL fallback, `label`/`matrix` path styles, generated and sent
-cookie parameters, and the `operationId`, tags, and path-pattern selectors.
-SPEC-37 is in progress; SPEC-38…41 are `todo` tickets.
+cookie parameters, webhook cataloguing, the `operationId`, tags, and
+path-pattern selectors, and generated non-JSON bodies; SPEC-39…41 remain
+`todo`.
 
 P0 (correctness and trust) and P1 (proof it works) are both closed and
 committed on `master`. The P0 commits are:
@@ -77,9 +78,9 @@ P3 (SPEC-27…32) is complete. All P3 tickets are `done` and committed. P3 added
 surface and proof: a dependency-free POC API and runnable examples gallery
 (SPEC-27/28), a real-k6 live end-to-end test wired into CI (SPEC-29), a README
 overhaul (SPEC-30), and `AGENTS.md` onboarding (SPEC-31). It adds no new product
-features; selectors beyond `all`, non-JSON bodies, auth derivation, and
-remote specs remain deferred (cookies were deferred at P3 time and shipped later
-in SPEC-35).
+features; selectors beyond `all`, auth derivation, and remote specs remain
+deferred (cookies were deferred at P3 time and shipped later in SPEC-35;
+non-JSON bodies shipped later in SPEC-38).
 
 P3 commits on `master`:
 
@@ -239,19 +240,20 @@ Dependencies (resolved):
    `payloads` override (whole-body replacement) → explicit example/examples →
    schema `default` → faker by `type`/`format`; required and optional fields are
    always generated. This is now the README's documented behavior, not a plan.
-3. **Broader body/auth support — partially delivered.** Non-JSON bodies
-   (multipart, form-urlencoded, XML), security-scheme-derived auth, and
-   per-operation auth are still not implemented. Non-JSON required bodies and
-   security without configured auth are surfaced by SPEC-25 warnings;
-   security-scheme-derived and per-operation auth remain unimplemented without a
-   dedicated warning. Cookie parameters, deferred at P2 close, are generated and
-   sent since SPEC-35.
+3. **Broader body/auth support — partially delivered.** Security-scheme-derived
+   auth and per-operation auth are still not implemented; they are surfaced by
+   SPEC-25 warnings for security without configured auth, and
+   security-scheme-derived and per-operation auth remain unimplemented without
+   a dedicated warning. Non-JSON bodies (multipart, form-urlencoded, XML),
+   deferred at P2 close, are generated and sent since SPEC-38. Cookie
+   parameters, deferred at P2 close, are generated and sent since SPEC-35.
 
 #### P2 limitations
 
-- **Non-JSON request bodies** are not generated. A required non-JSON body is
-  sent without a body and produces a `warning:`; optional non-JSON bodies are
-  silent.
+- **Non-JSON request bodies were not generated (urlencoded, multipart, and XML
+  are generated as of SPEC-38).** A required non-JSON body outside those three
+  — and JSON — is sent without a body and produces a `warning:`; optional
+  unsupported bodies are silent.
 - **Cookie parameters were not generated or sent (fixed by SPEC-35).** They are
   now generated through the same example → `default` → faker chain (required and
   optional alike) and sent in exactly one percent-encoded `Cookie` header, in
@@ -285,8 +287,8 @@ P3 is complete and committed as SPEC-27…32. The phase had two outcomes: make
 the shipped tool easy to evaluate and adopt (POC API, runnable examples, README,
 AGENTS.md), and prove the real pipeline in CI by running the built CLI with real
 k6 against the checked-in POC API. P3 adds no new product capabilities;
-selectors beyond `all`, non-JSON bodies, and auth derivation remain deferred
-(cookies were deferred at P3 time and shipped later in SPEC-35).
+selectors beyond `all` and auth derivation remain deferred (cookies were
+deferred at P3 time and shipped later in SPEC-35; non-JSON bodies in SPEC-38).
 
 | Order | Key | Ticket ID | Priority | Status | Title |
 |---|---|---|---|---|---|
@@ -368,10 +370,11 @@ Claim → evidence → result:
 
 #### P3 limitations / non-goals
 
-- No new product features. Selectors beyond `all`, non-JSON bodies,
+- No new product features. Selectors beyond `all`,
   `securitySchemes`-derived auth, per-operation auth, and remote specs remain
   deferred and are documented as such in the README and examples gallery.
   Cookies were also deferred at P3 time; they shipped later in SPEC-35.
+  Non-JSON bodies also shipped later in SPEC-38.
 - The live e2e is a functional smoke test against a local, in-memory POC API;
   it is not a performance, capacity, or SLA test, and it does not call public
   internet APIs.
@@ -404,11 +407,11 @@ Claim → evidence → result:
 ### P4 — deferred capability expansion (in progress)
 
 P4 is in progress. Nine skeleton tickets were seeded on 2026-10-24 from a
-roadmap-vs-implementation gap review. SPEC-33, SPEC-34, SPEC-35, and SPEC-36 are
-done; SPEC-37 is `in_progress` and the remaining four are `todo` and await
-planner elaboration. The order below is the work order; do not reorder it without
-updating this file. Each ticket must be planned before implementation, and docs
-must describe shipped behavior only.
+roadmap-vs-implementation gap review. SPEC-33, SPEC-34, SPEC-35, SPEC-36, and
+SPEC-37 are done; SPEC-38 is `in_progress` and the remaining three are `todo`
+and await planner elaboration. The order below is the work order; do not reorder
+it without updating this file. Each ticket must be planned before
+implementation, and docs must describe shipped behavior only.
 
 | Order | Key | Ticket ID | Priority | Status | Title |
 |---|---|---|---|---|---|
@@ -416,8 +419,8 @@ must describe shipped behavior only.
 | 2 | SPEC-34 | `01M5QTK52K557BCDRTKWV0N6PS` | low | done | Implement `label` and `matrix` path parameter styles |
 | 3 | SPEC-35 | `01M5QTK8711DW0S5BFN0M78R1D` | medium | done | Generate and send cookie parameters |
 | 4 | SPEC-36 | `01M5QTKB3GR8JAST4FF8Q35VQN` | high | done | Support operation selectors beyond the `all` literal |
-| 5 | SPEC-37 | `01M5QTKE0SXC7BY1KX6WTCQGRT` | medium | in_progress | Catalogue OpenAPI 3.1 `webhooks` |
-| 6 | SPEC-38 | `01M5QTKGSG573T640BKBVJJ8Q5` | high | todo | Generate non-JSON request bodies |
+| 5 | SPEC-37 | `01M5QTKE0SXC7BY1KX6WTCQGRT` | medium | done | Catalogue OpenAPI 3.1 `webhooks` |
+| 6 | SPEC-38 | `01M5QTKGSG573T640BKBVJJ8Q5` | high | in_progress | Generate non-JSON request bodies |
 | 7 | SPEC-39 | `01M5QTKKJBDDMR0AJV6ENT8661` | high | todo | Derive global auth from `securitySchemes` |
 | 8 | SPEC-40 | `01M5QTKPE005PRTKMFG1DGEFSX` | medium | todo | Add per-operation auth overrides |
 | 9 | SPEC-41 | `01M5QTKSARFS9P8RXMTS9BB2AW` | medium | todo | Fetch remote `http(s)` specs |
@@ -460,8 +463,9 @@ Decisions and resolved behavior:
   deduplicated on `METHOD path` first-wins. No-match entries warn per selector
   form; a zero-match selection keeps the SPEC-14 exit-`2` no-run path. Include/
   exclude composition and tolerant matching remain deferred.
-- SPEC-37 (in progress) catalogues 3.1 `webhooks` operations after the document's
-  `paths`: each `webhooks.<name>` entry is catalogued exactly like a `paths`
+- SPEC-37 (done, committed as `49556bb`) catalogues 3.1 `webhooks` operations
+  after the document's `paths`: each `webhooks.<name>` entry is catalogued
+  exactly like a `paths`
   entry whose path is `/<name>` (leading `/` added when missing), with the
   fixed canonical method order. SpecWeaver inverts the webhook direction —
   load tests **send** webhook-shaped requests **to the configured base URL**
@@ -473,8 +477,29 @@ Decisions and resolved behavior:
   catalogue the `webhooks` member. Webhook `$ref` resolution beyond the
   existing local `$ref` support and fetching/validating the real consumer are
   out of scope.
-- SPEC-38 must define multipart/file-body representation without adding runtime
-  dependencies.
+- SPEC-38 (in progress) generates the three named non-JSON bodies **in the CLI**
+  (faker never runs in k6; the emitted script stays dependency-free and each
+  body is delivered as a single raw string plus its matched `Content-Type`):
+  - `application/x-www-form-urlencoded` — object schema → `key=value` pairs
+    joined by `&`, names/values percent-encoded, schema property order, arrays
+    as repeated keys, nested objects as their JSON text.
+  - `multipart/form-data` — a single deterministic constant boundary
+    (`specweaver-multipart-boundary`) instead of per-run randomness;
+    `Content-Disposition: form-data; name="<name>"` parts, one per array item;
+    a `format: binary` field sends the deterministic placeholder
+    `specweaver-binary-part` (no real file reading); trailing closing boundary.
+  - `application/xml` — minimal deterministic serialization: `<root>` wrapping
+    one child per property, arrays as repeated child elements, primitives as
+    XML-escaped text nodes, schema property order. XML attributes, namespaces,
+    and custom root names are not modelled.
+  Media-type parameters (`; charset=…`) are not matched. A media-level
+  `example` wins (a string verbatim, an object through the serializer).
+  `Content-Type` follows the matched media type (multipart includes
+  `; boundary=`); existing/auth `Content-Type` collision precedence is
+  unchanged. `payloads` overrides still replace generated JSON bodies only — a
+  generated non-JSON body is kept, and a matching override is reported as not
+  applied (never silently). Coverage: the required-body warning narrows to
+  required bodies declaring none of the four supported media types.
 - SPEC-39/40 must preserve explicit-config precedence and secret redaction;
   unsupported schemes stay warn-only.
 - SPEC-41 must define an explicit timeout/redirect/SSRF policy before fetching.
@@ -592,6 +617,26 @@ unless the product owner reopens them. Do not create tickets for them here.
   344/344 passing, 0 failed, 0 skipped. P4 remains open; the other five tickets
   are untouched.
 - 2026-11-03: SPEC-35 approved and done (committed as `fc43905`).
+- 2026-11-03: SPEC-37 done: 3.1 `webhooks` entries are catalogued as path
+  operations at `/<webhookName>` (leading `/` added when missing) after
+  `paths`, in document order with the canonical method order, sharing the
+  `paths` catalogue code path; webhook inversion model recorded in the P4
+  decisions. Webhooks-only specs run under `all`; the zero-operation warning
+  now names components-only documents as the only cause. `npm run build`
+  clean; `npm test` 350/350; committed as `49556bb`.
+- 2026-11-03: SPEC-38 in progress: `application/x-www-form-urlencoded`,
+  `multipart/form-data`, and `application/xml` bodies are generated in the CLI
+  as one wire string each (fixed multipart boundary
+  `specweaver-multipart-boundary`, deterministic binary placeholder
+  `specweaver-binary-part`, minimal `<root>` XML serialization) and sent with
+  the matched `Content-Type` (multipart carries `; boundary=`). The required
+  non-JSON-body coverage warning now fires only for required bodies declaring
+  none of the four supported media types, with updated text; a `payloads`
+  override matching a non-JSON generated body is reported as not applied and
+  the generated body is kept. README, AGENTS.md, ROADMAP, and the examples
+  gallery reflect that the photo example no longer warns. `npm run build`
+  clean; `npm test` 358/358. P4 remains open; the other three tickets are
+  untouched.
 - 2026-11-03: SPEC-37 implemented: OpenAPI 3.1 `webhooks` entries are catalogued
   as path operations at `/<webhookName>` (leading `/` added when missing) after
   `paths`, in document order with the canonical method order, sharing the

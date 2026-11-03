@@ -262,11 +262,12 @@ do not edit the sample.
 - **Path:** [`poc-api/specweaver.warnings.config.yaml`](poc-api/specweaver.warnings.config.yaml)
   with [`poc-api/openapi.yaml`](poc-api/openapi.yaml). This is SPEC-27's config,
   reused and linked, not copied.
-- **Teaches:** the remaining non-fatal v1 coverage warnings. `operations: all`
-  with no auth selects every operation, including the deliberate gap surfaces
-  (unauthenticated `GET /admin/stats` and the required multipart
-  `POST /pets/{petId}/photo`). `GET /recommendations` declares a cookie
-  parameter; it is generated and sent, so it produces no warning.
+- **Teaches:** the remaining non-fatal v1 coverage warning. `operations: all`
+  with no auth selects every operation, including the deliberate gap surface
+  (unauthenticated `GET /admin/stats`). `GET /recommendations` declares a cookie
+  parameter; it is generated and sent, so it produces no warning. The required
+  multipart body of `POST /pets/{petId}/photo` is now generated too (SPEC-38),
+  so it no longer warns either.
 - **Prerequisites:** common prerequisites and a running POC API.
 - **Command (repository root):**
 
@@ -275,11 +276,10 @@ do not edit the sample.
     --vus 1 --duration 2s --out /tmp/specweaver-examples/warnings.json
   ```
 
-- **Expected stderr, exactly two lines in this order:**
+- **Expected stderr, exactly one line:**
 
   ```text
   warning: operation "GET /admin/stats" declares security but no auth is configured; the request will be sent without authentication.
-  warning: operation "POST /pets/{petId}/photo" requires a request body but declares no JSON media type (declared: "multipart/form-data"); the request will be sent without a body.
   ```
 
 - **Expected stdout (key lines, typical):**
@@ -368,7 +368,7 @@ Every shipped feature has at least one runnable example.
 | Explicit `baseUrl` | [Multi-spec + explicit `baseUrl`](#multi-spec--explicit-baseurl) |
 | Generated `Cookie` header from cookie parameters | [Zero-override](#zero-override-operations-all), [Coverage warnings](#coverage-warnings) |
 | Warning: security without configured auth | [Coverage warnings](#coverage-warnings) |
-| Warning: required non-JSON body not generated | [Coverage warnings](#coverage-warnings) |
+| Generated multipart body (fixed boundary, placeholder for `format: binary`) | [Coverage warnings](#coverage-warnings) |
 | Machine-readable results file with per-operation checks | All examples (paths above) |
 | CI / command usage | [CI and command snippet](#ci-and-command-snippet) |
 
@@ -449,14 +449,17 @@ NODE
 Shipped and demonstrated here: `operations: all`, explicit operation lists,
 global static token/headers auth with `${ENV_VAR}` resolution, whole-body payload
 overrides, multiple local specs, explicit `baseUrl`, cookie parameter generation
-(the POC spec's optional `session` cookie is generated and sent), the remaining
-non-fatal coverage warnings, and the results JSON. The README also documents the
-shipped `operationId`, `tags`, and path-pattern selector entries; the gallery
-keeps its examples on explicit lists.
+(the POC spec's optional `session` cookie is generated and sent), generated
+non-JSON bodies for urlencoded/multipart/XML (SPEC-38; the POC `photo` upload's
+required multipart body is generated in demo), webhooks, the remaining coverage
+warning, and the results JSON. The README also documents the shipped
+`operationId`, `tags`, and path-pattern selector entries; the gallery keeps its
+examples on explicit lists.
 
 Deferred and **not** demonstrated or claimed: tolerant/fuzzy method/path
-matching, non-JSON (multipart/form-data, form-urlencoded, XML) body generation,
-`securitySchemes`-derived auth, per-operation auth, and remote `http(s)` specs.
+matching, non-JSON media types outside urlencoded/multipart/XML, `format: binary`
+file uploads (a fixed placeholder is sent), `securitySchemes`-derived auth,
+per-operation auth, and remote `http(s)` specs.
 
 See the roadmap for the authoritative limitations:
 

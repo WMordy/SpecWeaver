@@ -38,12 +38,12 @@ test("buildCoverageWarnings is pure and returns no warnings for a modelable oper
   assert.deepEqual(buildCoverageWarnings([], {}), []);
 });
 
-test("required non-JSON request bodies warn once and name the declared media types", () => {
+test("required unsupported request bodies warn once and name the declared media types", () => {
   for (const [content, declared] of [
-    [{ "application/xml": {} }, '"application/xml"'],
+    [{ "text/csv": {} }, '"text/csv"'],
     [
-      { "multipart/form-data": {}, "text/plain": {} },
-      '"multipart/form-data", "text/plain"',
+      { "application/octet-stream": {}, "text/plain": {} },
+      '"application/octet-stream", "text/plain"',
     ],
   ]) {
     const warnings = warningsFor({
@@ -58,20 +58,29 @@ test("required non-JSON request bodies warn once and name the declared media typ
   }
 });
 
-test("a required body with empty or missing content warns as non-JSON", () => {
+test("a required body with empty or missing content warns as unsupported", () => {
   for (const requestBody of [{ required: true }, { required: true, content: {} }]) {
     const warnings = warningsFor({ requestBody });
     assert.equal(warnings.length, 1, JSON.stringify(warnings));
-    assert.match(warnings[0], /declares no JSON media type \(declared: none\)/);
+    assert.match(warnings[0], /declares none of the supported media types/);
+    assert.match(warnings[0], /\(declared: none\)/);
   }
 });
 
-test("optional non-JSON bodies and JSON bodies (including +json) do not warn", () => {
+test("optional unsupported bodies and supported bodies do not warn", () => {
   for (const requestBody of [
-    { content: { "application/xml": {} } },
+    { content: { "text/csv": {} } },
+    { required: false, content: { "text/csv": {} } },
     { required: false, content: { "application/xml": {} } },
+    { required: false, content: { "multipart/form-data": {} } },
+    { required: false, content: { "application/x-www-form-urlencoded": {} } },
+    { required: true, content: { "text/csv": {}, "application/xml": {} } },
+    { required: true, content: { "text/csv": {}, "application/json": {} } },
     { required: true, content: { "application/json": {} } },
     { required: true, content: { "application/problem+json": {} } },
+    { required: true, content: { "application/x-www-form-urlencoded": {} } },
+    { required: true, content: { "multipart/form-data": {} } },
+    { required: true, content: { "application/xml": {} } },
   ]) {
     assert.deepEqual(warningsFor({ requestBody }), [], JSON.stringify(requestBody));
   }
@@ -134,7 +143,7 @@ test("warnings follow operation order and body -> security within an operation",
     operation({
       method: "POST",
       path: "/first",
-      requestBody: { required: true, content: { "application/xml": {} } },
+      requestBody: { required: true, content: { "text/csv": {} } },
       parameters: [{ name: "session", in: "cookie" }],
       security: [{ bearerAuth: [] }],
     }),

@@ -5,12 +5,13 @@
  * document. Two things are deliberately not modelled in v1, and generation
  * would otherwise omit them silently:
  *
- * 1. **Required non-JSON request bodies** — {@link generateRequestBody} only
- *    produces a JSON body (using {@link jsonMediaType}), so a required
- *    `application/xml` or `multipart/form-data` body is dropped. This classifier
- *    warns exactly when generation would return `undefined` for a required
- *    body, including a required body with an empty or missing `content` map.
- *    Optional non-JSON bodies never warn.
+ * 1. **Required unsupported request bodies** — generation now produces a body
+ *    for `application/json` (generalizing to any `*json*` media type), plus
+ *    the three SPEC-38 media types (`application/x-www-form-urlencoded`,
+ *    `multipart/form-data`, `application/xml`). This classifier warns exactly
+ *    when a required body declares none of those four, so the request is sent
+ *    bodiless, including a required body with an empty or missing `content`
+ *    map. Optional unsupported bodies never warn.
  * 2. **Declared security without configured auth** — auth is a single global
  *    static value (SPEC-5). If an operation's effective `security` is non-empty
  *    but the resolved auth headers are empty, no auth will be sent; warn once.
@@ -41,7 +42,13 @@
  * for its selected operations that an `all` run reports for the whole catalog.
  */
 import type { OperationEntry, RequestBodyObject } from "./spec.js";
-import { jsonMediaType } from "./request-data.js";
+import {
+  MULTIPART_MEDIA_TYPE,
+  URLENCODED_MEDIA_TYPE,
+  XML_MEDIA_TYPE,
+  jsonMediaType,
+  nonJsonMediaType,
+} from "./request-data.js";
 
 /** `METHOD path`, the operation identity used in every coverage message. */
 function operationLabel(operation: OperationEntry): string {
@@ -59,12 +66,13 @@ function contentMap(
 }
 
 /**
- * Warn when a required body cannot be generated as JSON (A3).
+ * Warn when a required body cannot be generated (A3).
  *
- * Mirrors generation exactly: no JSON media type means
- * `generateRequestBody` returns `undefined`, so the request is sent bodiless.
+ * Mirrors generation exactly: no JSON media type and none of the three
+ * SPEC-38 media types means no generator applies, so the request is sent
+ * bodiless.
  */
-function requiredNonJsonBodyWarning(
+function requiredUnsupportedBodyWarning(
   operation: OperationEntry,
 ): string | undefined {
   const body = operation.requestBody;
@@ -73,8 +81,15 @@ function requiredNonJsonBodyWarning(
   }
 
   const content = contentMap(body);
-  if (content !== undefined && jsonMediaType(content) !== undefined) {
-    return undefined;
+  if (content !== undefined) {
+    if (jsonMediaType(content) !== undefined) {
+      return undefined;
+    }
+    // SPEC-38: the three non-JSON generators apply whenever their media type
+    // is declared, mirroring generateNonJsonBody's fixed match order.
+    if (nonJsonMediaType(content) !== undefined) {
+      return undefined;
+    }
   }
 
   const declared =
@@ -84,7 +99,7 @@ function requiredNonJsonBodyWarning(
           .map((mediaType) => `"${mediaType}"`)
           .join(", ");
 
-  return `operation "${operationLabel(operation)}" requires a request body but declares no JSON media type (declared: ${declared}); the request will be sent without a body.`;
+  return `operation "${operationLabel(operation)}" requires a request body but declares none of the supported media types — JSON, ${URLENCODED_MEDIA_TYPE}, ${MULTIPART_MEDIA_TYPE}, ${XML_MEDIA_TYPE} (declared: ${declared}); the request will be sent without a body.`;
 }
 
 /**
@@ -123,7 +138,7 @@ export function buildCoverageWarnings(
   const warnings: string[] = [];
   for (const operation of operations) {
     const warningsForOperation = [
-      requiredNonJsonBodyWarning(operation),
+      requiredUnsupportedBodyWarning(operation),
       securityWithoutAuthWarning(operation, authHeaders),
     ];
     for (const warning of warningsForOperation) {

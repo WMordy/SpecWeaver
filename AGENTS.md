@@ -21,7 +21,7 @@ the source of truth for ticket status; ROADMAP tables can lag it.
 | `src/selection.ts` | `operations` expansion: `all`, explicit, `operationId`, tags, path patterns; deterministic union/dedupe and unmatched reporting. |
 | `src/request-data.ts` | Path/query/header/cookie parameter and JSON-body generation, and `payloads` whole-body overrides. |
 | `src/auth.ts` | Global static token/header injection and secret redaction. |
-| `src/coverage.ts` | Non-fatal coverage-gap warnings (non-JSON body, security-without-auth). |
+| `src/coverage.ts` | Non-fatal coverage-gap warnings (unsupported required body, security-without-auth). |
 | `src/script/emit.ts` | Emits the dependency-free k6 script plus companion JSON data. |
 | `src/run.ts` | k6 PATH preflight/spawn, streaming output, temp-directory lifecycle. |
 | `src/results.ts` | Results JSON, console summary, warning channel, exit-code policy. |
@@ -127,8 +127,9 @@ k6 rules:
   absolute `servers[].url` (unusable entries are skipped with a warning),
   otherwise the run exits `2`.
 - `specs` are local files only; remote `http(s)` URLs are not fetched.
-- Deferred (not shipped): non-JSON bodies, `securitySchemes`-derived auth,
-  per-operation auth, and remote specs. See [ROADMAP.md](ROADMAP.md).
+- Deferred (not shipped): non-JSON media types outside urlencoded/multipart/XML,
+  `securitySchemes`-derived auth, per-operation auth, and remote specs. See
+  [ROADMAP.md](ROADMAP.md).
 
 ## Contracts and docs
 

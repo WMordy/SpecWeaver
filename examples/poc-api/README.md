@@ -149,16 +149,19 @@ spec's absolute `http://127.0.0.1:8080` server URL is used, and replaces the
 ## Coverage warnings (expected limitations)
 
 The warnings config selects every operation with no auth. It exits `0` but emits
-exactly these two `warning:` lines on stderr (order follows the spec):
+exactly this one `warning:` line on stderr:
 
 ```text
 warning: operation "GET /admin/stats" declares security but no auth is configured; the request will be sent without authentication.
-warning: operation "POST /pets/{petId}/photo" requires a request body but declares no JSON media type (declared: "multipart/form-data"); the request will be sent without a body.
 ```
 
 `GET /recommendations` declares an optional `session` cookie parameter; it is
 generated and sent in a `Cookie` header, so it produces no warning. The POC
-server deliberately ignores cookies.
+server deliberately ignores cookies. The required multipart body of
+`POST /pets/{petId}/photo` is generated as well (SPEC-38): SpecWeaver sends the
+fixed `specweaver-multipart-boundary` structure with the placeholder value
+`specweaver-binary-part` for the `format: binary` field, and the server still
+does not parse it, so no body warning appears either.
 
 Run it with:
 

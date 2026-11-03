@@ -204,19 +204,208 @@ test("generates a JSON request body for an operation", () => {
   assert.ok(Number.isInteger(data.body.age));
 });
 
-test("ignores non-JSON request bodies (multipart/form-data)", () => {
+test("generates a urlencoded body with percent-encoding, property order, and repeated array keys", () => {
   const data = generateRequestData(
     operation({
       requestBody: {
         content: {
-          "multipart/form-data": { schema: { type: "object", properties: {} } },
+          "application/x-www-form-urlencoded": {
+            schema: {
+              type: "object",
+              properties: {
+                "a b": { example: "1 two" },
+                count: { example: 7 },
+                tags: { example: [3, 5] },
+                meta: { type: "object" },
+              },
+            },
+          },
         },
       },
     }),
   );
 
   assert.equal(data.body, undefined);
-  assert.ok(!("body" in data));
+  assert.equal(data.bodyContentType, "application/x-www-form-urlencoded");
+  // Property order; percent-encoded names and values; `&`-joined pairs;
+  // repeated keys for arrays; a generated nested object serializes as its
+  // JSON text (here `{}` because the schema declares no properties).
+  assert.equal(data.rawBody, "a%20b=1%20two&count=7&tags=3&tags=5&meta=%7B%7D");
+});
+
+test("generates a multipart body with a fixed boundary, ordered parts, and a binary placeholder", () => {
+  const boundary = "specweaver-multipart-boundary";
+  const part = (name, value) =>
+    `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}`;
+  const data = generateRequestData(
+    operation({
+      requestBody: {
+        content: {
+          "multipart/form-data": {
+            schema: {
+              type: "object",
+              properties: {
+                name: { example: "Rex" },
+                tags: { example: ["foo", "bar"] },
+              },
+            },
+          },
+        },
+      },
+    }),
+  );
+
+  assert.equal(data.body, undefined);
+  assert.equal(
+    data.bodyContentType,
+    `multipart/form-data; boundary=${boundary}`,
+  );
+  assert.ok(data.rawBody.startsWith(`--${boundary}\r\n`), data.rawBody);
+  assert.ok(data.rawBody.endsWith(`--${boundary}--\r\n`), data.rawBody);
+  // One `Content-Disposition` part per field, in property order; one part per
+  // array item; each `format: binary` field carries the fixed placeholder.
+  assert.equal(
+    data.rawBody,
+    [
+      part("name", "Rex"),
+      part("tags", "foo"),
+      part("tags", "bar"),
+      `--${boundary}--\r\n`,
+    ].join("\r\n"),
+  );
+
+  const binary = generateRequestData(
+    operation({
+      requestBody: {
+        content: {
+          "multipart/form-data": {
+            schema: {
+              type: "object",
+              properties: { photo: { type: "string", format: "binary" } },
+            },
+          },
+        },
+      },
+    }),
+  );
+  assert.equal(binary.rawBody, [part("photo", "specweaver-binary-part"), `--${boundary}--\r\n`].join("\r\n"));
+});
+
+test("generates an XML body with a root element, property order, and XML-escaped values", () => {
+  const data = generateRequestData(
+    operation({
+      requestBody: {
+        content: {
+          "application/xml": {
+            schema: {
+              type: "object",
+              properties: {
+                name: { example: "a<b&c" },
+                enabled: { example: true },
+                tags: { example: ["x", "y"] },
+                meta: { example: { kind: "n" } },
+              },
+            },
+          },
+        },
+      },
+    }),
+  );
+
+  assert.equal(data.body, undefined);
+  assert.equal(data.bodyContentType, "application/xml");
+  // One root element; one child per property in property order; repeated
+  // child elements for arrays; nested objects as nested elements; escaped
+  // text-node values.
+  assert.equal(
+    data.rawBody,
+    `<root><name>a&lt;b&amp;c</name><enabled>true</enabled><tags>x</tags><tags>y</tags><meta><kind>n</kind></meta></root>`,
+  );
+});
+
+test("XML escaping covers all five XML special characters", () => {
+  const data = generateRequestData(
+    operation({
+      requestBody: {
+        content: {
+          "application/xml": {
+            schema: {
+              type: "object",
+              properties: { name: { example: "a<b&c\"d'e" } },
+            },
+          },
+        },
+      },
+    }),
+  );
+
+  assert.equal(data.rawBody, `<root><name>a&lt;b&amp;c&quot;d&apos;e</name></root>`);
+});
+
+test("a media-level example wins for non-JSON bodies: strings verbatim, objects serialized", () => {
+  const verbatim = generateRequestData(
+    operation({
+      requestBody: {
+        content: {
+          "application/x-www-form-urlencoded": {
+            example: "a=1%20one&b=two",
+          },
+        },
+      },
+    }),
+  );
+  assert.equal(verbatim.rawBody, "a=1%20one&b=two");
+
+  const object = generateRequestData(
+    operation({
+      requestBody: {
+        content: {
+          "application/x-www-form-urlencoded": {
+            example: { "a b": "1&1", tags: ["x", "y"] },
+            schema: { type: "object", properties: {} },
+          },
+        },
+      },
+    }),
+  );
+  assert.equal(object.rawBody, "a%20b=1%261&tags=x&tags=y");
+});
+
+test("JSON media type wins over a supported non-JSON media type", () => {
+  const data = generateRequestData(
+    operation({
+      requestBody: {
+        content: {
+          "application/xml": { schema: { type: "object", properties: {} } },
+          "application/json": {
+            schema: { type: "object", properties: { name: { type: "string" } } },
+          },
+        },
+      },
+    }),
+  );
+
+  assert.equal(typeof data.body, "object");
+  assert.equal(data.rawBody, undefined);
+});
+
+test("matches the fixed media-type priority when several non-JSON types are declared", () => {
+  const data = generateRequestData(
+    operation({
+      requestBody: {
+        content: {
+          "application/xml": { schema: { type: "object", properties: {} } },
+          "application/x-www-form-urlencoded": {
+            schema: { type: "object", properties: {} },
+          },
+          "multipart/form-data": { schema: { type: "object", properties: {} } },
+        },
+      },
+    }),
+  );
+
+  assert.equal(data.bodyContentType, "application/x-www-form-urlencoded");
+  assert.equal(data.rawBody, "");
 });
 
 test("prefers a parameter-level example over the schema's faker value", () => {
@@ -1256,6 +1445,36 @@ test("payload override matching normalizes method case", () => {
   assert.deepEqual(lower.warnings, []);
   assert.deepEqual(lower.requests[0].body, { name: "lower" });
   assert.deepEqual(lower.requests, upper.requests);
+});
+
+test("a generated non-JSON body is kept and the override warns as not applied", () => {
+  const generated = generateRequestData(
+    operation({
+      method: "POST",
+      path: "/pets",
+      requestBody: {
+        content: {
+          "application/x-www-form-urlencoded": {
+            schema: { type: "object", properties: { name: { example: "Gen" } } },
+          },
+        },
+      },
+    }),
+  );
+
+  const { requests, warnings } = applyPayloadOverrides([generated], [
+    { method: "post", path: "/pets", body: { name: "override" } },
+  ]);
+
+  // The override matches, so nothing else warns and the generated body is kept.
+  assert.equal(requests[0].rawBody, "name=Gen");
+  assert.equal(requests[0].bodyContentType, "application/x-www-form-urlencoded");
+  assert.equal("body" in requests[0], false);
+  assert.deepEqual(warnings, [
+    'payload override for "POST /pets" is not applied to the operation\'s generated application/x-www-form-urlencoded body; overrides replace generated JSON bodies only.',
+  ]);
+  // No does-not-match warning: the operation was selected.
+  assert.ok(!warnings.some((line) => line.includes("does not match")));
 });
 
 test("an override for an unselected operation warns and changes nothing", () => {

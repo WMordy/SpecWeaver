@@ -46,9 +46,9 @@
  * forever. One-sided numeric bounds (`minimum` without `maximum`, or vice
  * versa) are sealed to a valid range before delegating to faker.
  *
- * Out of scope for v1: non-JSON request bodies (multipart/form-data,
- * application/x-www-form-urlencoded, XML), cookie jars / response `Set-Cookie`
- * handling, auth header injection (SPEC-5), and executing requests.
+ * Out of scope for v1: cookie jars / response `Set-Cookie` handling, auth
+ * header injection (SPEC-5), and executing requests. Non-JSON request bodies
+ * are generated as raw strings (urlencoded, multipart, XML — SPEC-38).
  *
  * SPEC-13 adds {@link applyPayloadOverrides}: after generation, a configured
  * `payloads[].body` replaces the generated JSON body of the operation whose
@@ -98,6 +98,18 @@ export interface GeneratedRequestData {
   headers: Record<string, string>;
   /** Decoded JSON request body, when the operation declares a JSON body. */
   body?: unknown;
+  /**
+   * A generated non-JSON body (SPEC-38) — `urlencoded`, `multipart`, or XML —
+   * pre-serialized in the CLI and carried as one wire string. Mutually
+   * exclusive with {@link body}; overrides do not replace it.
+   */
+  rawBody?: string;
+  /**
+   * The `Content-Type` header value for {@link rawBody} (the matched media
+   * type, with the fixed boundary parameter for multipart). Undefined for a
+   * JSON body, which keeps the emitter's plain `application/json`.
+   */
+  bodyContentType?: string;
 }
 
 /** Options controlling generation. */
@@ -675,6 +687,227 @@ export function generateRequestBody(
 }
 
 /**
+ * The three supported non-JSON body media types (SPEC-38), in the fixed order
+ * in which {@link generateNonJsonBody} considers them when a body declares more
+ * than one. Media-type parameters (e.g. `; charset=utf-8`) are not matched.
+ */
+export const URLENCODED_MEDIA_TYPE = "application/x-www-form-urlencoded";
+export const MULTIPART_MEDIA_TYPE = "multipart/form-data";
+export const XML_MEDIA_TYPE = "application/xml";
+
+/**
+ * The deterministic boundary emitted for `multipart/form-data` bodies
+ * (SPEC-38). No per-run randomness: the boundary is a documented constant, so
+ * the body and its `Content-Type` (which must carry the same boundary) are
+ * reproducible.
+ */
+export const MULTIPART_BOUNDARY = "specweaver-multipart-boundary";
+
+/**
+ * The deterministic placeholder sent for a `format: binary` field (SPEC-38).
+ * No real file is read or uploaded; the placeholder keeps bodies reproducible.
+ */
+export const BINARY_PLACEHOLDER = "specweaver-binary-part";
+
+/** The root element name of a generated `application/xml` body (SPEC-38). */
+export const XML_ROOT_ELEMENT = "root";
+
+/**
+ * The matched supported non-JSON media type of a request-body `content` map,
+ * in the fixed {@link generateNonJsonBody} order, exact-matched. Exported so
+ * SPEC-25's coverage classifier applies exactly the same rule as generation.
+ */
+export function nonJsonMediaType(content: JsonObject): string | undefined {
+  for (const mediaType of [
+    URLENCODED_MEDIA_TYPE,
+    MULTIPART_MEDIA_TYPE,
+    XML_MEDIA_TYPE,
+  ]) {
+    if (isObject(content[mediaType])) {
+      return mediaType;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The generated value object for a non-JSON body (SPEC-38): for every declared
+ * property, in schema order, the property schema drives the standard
+ * example → `default` → faker chain, except that a `format: binary` property
+ * yields the deterministic {@link BINARY_PLACEHOLDER}. An object schema without
+ * `properties` generates an empty object (an empty body string for
+ * urlencoded, `<root></root>` for XML, a bare closing boundary for multipart).
+ */
+function generateBodyObject(schema: unknown, faker: Faker): JsonObject {
+  if (!isObject(schema) || !isObject(schema.properties)) {
+    return {};
+  }
+  const value: JsonObject = {};
+  for (const [name, propertySchema] of Object.entries(schema.properties)) {
+    value[name] =
+      isObject(propertySchema) && propertySchema.format === "binary"
+        ? BINARY_PLACEHOLDER
+        : generateFromSchema(propertySchema, faker);
+  }
+  return value;
+}
+
+/** Percent-encode one urlencoded field name or value (SPEC-38). */
+function encodeFormField(name: string): string {
+  return encodeURIComponent(name);
+}
+
+/**
+ * Serialize a value object as `application/x-www-form-urlencoded` (SPEC-38):
+ * `key=value` pairs joined by `&`, names and values percent-encoded, in the
+ * value's property order. Array values repeat the key; nested objects
+ * serialize as their JSON text (a documented simplification).
+ */
+function serializeUrlEncodedValue(value: unknown): string {
+  if (!isObject(value)) {
+    return "";
+  }
+  const pairs: string[] = [];
+  for (const [name, item] of Object.entries(value)) {
+    const values = Array.isArray(item) ? item.map(toScalarString) : [toScalarString(item)];
+    for (const entry of values) {
+      pairs.push(`${encodeFormField(name)}=${encodeFormField(entry)}`);
+    }
+  }
+  return pairs.join("&");
+}
+
+/**
+ * Serialize a value object as `multipart/form-data` (SPEC-38): one
+ * `Content-Disposition: form-data; name="<name>"` part per property (one part
+ * per array item), in the value's property order, separated per the multipart
+ * wire rules with a fixed {@link MULTIPART_BOUNDARY} and a trailing closing
+ * boundary. Nested objects serialize as their JSON text.
+ */
+function serializeMultipartValue(value: unknown): string {
+  const parts: string[] = [];
+  if (isObject(value)) {
+    for (const [name, item] of Object.entries(value)) {
+      const values = Array.isArray(item) ? item.map(toScalarString) : [toScalarString(item)];
+      for (const entry of values) {
+        parts.push(
+          `--${MULTIPART_BOUNDARY}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${entry}`,
+        );
+      }
+    }
+  }
+  parts.push(`--${MULTIPART_BOUNDARY}--`);
+  return `${parts.join("\r\n")}\r\n`;
+}
+
+/** Escape one text-node value for XML (SPEC-38). */
+function xmlEscape(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => {
+    switch (character) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case '"':
+        return "&quot;";
+      default:
+        return "&apos;";
+    }
+  });
+}
+
+/**
+ * Serialize a value as XML child elements (SPEC-38): one child element per
+ * property in property order, arrays as repeated property elements, objects
+ * as nested elements, primitives as escaped text nodes. Attribute, namespace,
+ * and custom-root modeling is out of scope.
+ */
+function serializeXmlValue(value: unknown, name: string = XML_ROOT_ELEMENT): string {
+  if (Array.isArray(value)) {
+    return value.map((item) => serializeXmlValue(item, name)).join("");
+  }
+  if (isObject(value)) {
+    const children = Object.entries(value)
+      .map(([key, item]) => serializeXmlValue(item, key))
+      .join("");
+    return `<${name}>${children}</${name}>`;
+  }
+  return `<${name}>${xmlEscape(toScalarString(value))}</${name}>`;
+}
+
+/** One generated non-JSON body: its wire string and Content-Type header value. */
+export interface RawBody {
+  /** The serialized body exactly as it goes on the wire. */
+  readonly raw: string;
+  /**
+   * The `Content-Type` header value declared for the body, i.e. the matched
+   * media type (with the fixed `; boundary=` parameter for multipart).
+   */
+  readonly contentType: string;
+}
+
+/**
+ * Generate the non-JSON request body for an operation (SPEC-38).
+ *
+ * Applies to `application/x-www-form-urlencoded`, `multipart/form-data`, and
+ * `application/xml`; the matched type is the first supported entry in the
+ * fixed {@link nonJsonMediaType} order. A media-level `example`/`examples`
+ * wins: a string example is sent verbatim, an object example is serialized by
+ * the matched type's serializer, and any other example is ignored in favor of
+ * schema generation.
+ * Serialization happens **in the CLI** — faker runs here, and the emitted
+ * script receives the joined single raw string, keeping it dependency-free.
+ */
+export function generateNonJsonBody(
+  requestBody: RequestBodyObject | undefined,
+  faker: Faker,
+): RawBody | undefined {
+  if (!isObject(requestBody) || !isObject(requestBody.content)) {
+    return undefined;
+  }
+  const mediaType = nonJsonMediaType(requestBody.content);
+  if (mediaType === undefined) {
+    return undefined;
+  }
+  const media = requestBody.content[mediaType];
+  if (!isObject(media)) {
+    return undefined;
+  }
+
+  const serialize = (value: unknown): string => {
+    switch (mediaType) {
+      case URLENCODED_MEDIA_TYPE:
+        return serializeUrlEncodedValue(value);
+      case MULTIPART_MEDIA_TYPE:
+        return serializeMultipartValue(value);
+      default:
+        return serializeXmlValue(value);
+    }
+  };
+
+  const example = firstExample(media);
+  // A string example is sent verbatim; an object example is serialized by the
+  // matched type's serializer; any other example (array, number, …) is ignored
+  // in favor of schema generation.
+  const raw =
+    example.found && typeof example.value === "string"
+      ? example.value
+      : example.found && isObject(example.value)
+        ? serialize(example.value)
+        : serialize(generateBodyObject(media.schema, faker));
+
+  return {
+    raw,
+    contentType:
+      mediaType === MULTIPART_MEDIA_TYPE
+        ? `${mediaType}; boundary=${MULTIPART_BOUNDARY}`
+        : mediaType,
+  };
+}
+
+/**
  * The OpenAPI default `style` for a parameter location: `form` for query
  * parameters, `simple` for path, header, and cookie parameters. Cookie
  * serialization ignores `style` (see `serializeCookieParameter`).
@@ -989,6 +1222,15 @@ function generateWith(operation: OperationEntry, faker: Faker): GeneratedRequest
   const body = generateRequestBody(operation.requestBody, faker);
   if (body !== undefined) {
     result.body = body;
+  } else {
+    // SPEC-38: without a JSON media type, the URL-encoding, multipart, and XML
+    // generators apply, in that fixed order; the matched media type is the
+    // first supported entry in the request body's `content` map.
+    const nonJson = generateNonJsonBody(operation.requestBody, faker);
+    if (nonJson !== undefined) {
+      result.rawBody = nonJson.raw;
+      result.bodyContentType = nonJson.contentType;
+    }
   }
   return result;
 }
@@ -1042,7 +1284,9 @@ function operationKey(method: string, path: string): string {
  * Matching uses the same normalized key as operation selection: the method is
  * upper-cased and the path is the OpenAPI path template, e.g. `POST /pets`.
  * `body` is a **whole-value replacement** for the generated JSON body — there is
- * no deep merge and all other generated request fields are preserved.
+ * no deep merge and all other generated request fields are preserved. SPEC-38:
+ * an operation that generated a non-JSON body keeps it; the override matches
+ * (no does-not-match warning) but is reported as not applied instead.
  *
  * Overrides that match no entry in `requests` (because the operation was not
  * selected, or is absent from the loaded spec) are reported in `warnings` and
@@ -1063,6 +1307,7 @@ export function applyPayloadOverrides(
   }
 
   const applied = new Set<string>();
+  const notApplied: string[] = [];
   const result = requests.map((request) => {
     const key = operationKey(request.method, request.path);
     const override = overrides.get(key);
@@ -1070,10 +1315,19 @@ export function applyPayloadOverrides(
       return request;
     }
     applied.add(key);
+    if (request.rawBody !== undefined) {
+      // SPEC-38: overrides replace generated JSON bodies only; a generated
+      // non-JSON body is kept (never silently dropped), with the media type
+      // named so the user knows which config key was ignored.
+      notApplied.push(
+        `payload override for "${key}" is not applied to the operation's generated ${request.bodyContentType} body; overrides replace generated JSON bodies only.`,
+      );
+      return request;
+    }
     return { ...request, body: override.body };
   });
 
-  const warnings: string[] = [];
+  const warnings = [...notApplied];
   for (const override of payloads) {
     const key = operationKey(override.method, override.path);
     if (!applied.has(key)) {

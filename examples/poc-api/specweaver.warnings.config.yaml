@@ -5,14 +5,16 @@
 #
 #   node dist/cli.js --config examples/poc-api/specweaver.warnings.config.yaml --vus 1 --duration 2s
 #
-# `operations: all` with no `auth` selects every operation in openapi.yaml and
-# deliberately exercises the remaining v1 coverage gaps. Exactly two
-# `warning:` lines are expected on stderr (one per gap):
+# `operations: all` with no `auth` selects every operation in openapi.yaml.
+# Exactly one `warning:` line is expected on stderr:
 #
 #   1. GET /admin/stats declares bearer security but no auth is configured, so
-#      the request goes out unauthenticated;
-#   2. POST /pets/{petId}/photo requires a non-JSON (multipart/form-data) body,
-#      so SpecWeaver sends it without a body.
+#      the request goes out unauthenticated.
+#
+# POST /pets/{petId}/photo no longer warns either: its multipart/form-data body
+# is generated with the fixed boundary (SPEC-38), so the server acknowledges it.
+# A body warning would only appear for a media type outside JSON, urlencoded,
+# multipart, and XML.
 #
 # GET /recommendations declares an optional cookie parameter; it is generated
 # and sent in a Cookie header, so it no longer warns.

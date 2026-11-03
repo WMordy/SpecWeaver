@@ -293,6 +293,51 @@ test("serializes a JSON body when present and omits it otherwise", () => {
   assert.match(withoutBody.script, /operation\.body === undefined \? null : operation\.body/);
 });
 
+test("a generated non-JSON body carries its wire string and own Content-Type (SPEC-38)", () => {
+  const generated = generateRequestData(
+    {
+      method: "POST",
+      path: "/pets",
+      parameters: [],
+      security: [],
+      requestBody: {
+        content: {
+          "multipart/form-data": {
+            schema: {
+              type: "object",
+              properties: { name: { example: "Rex" } },
+            },
+          },
+        },
+      },
+    },
+  );
+
+  const { data } = emitScript({ config: config(), requests: [generated] });
+
+  assert.equal(data.operations[0].body, generated.rawBody);
+  assert.equal(
+    data.operations[0].headers["Content-Type"],
+    "multipart/form-data; boundary=specweaver-multipart-boundary",
+  );
+
+  const urlencoded = emitScript({
+    config: config(),
+    requests: [
+      request({
+        method: "POST",
+        rawBody: "a=1&b=2",
+        bodyContentType: "application/x-www-form-urlencoded",
+      }),
+    ],
+  });
+  assert.equal(urlencoded.data.operations[0].body, "a=1&b=2");
+  assert.equal(
+    urlencoded.data.operations[0].headers["Content-Type"],
+    "application/x-www-form-urlencoded",
+  );
+});
+
 test("nested arrays/objects round-trip through the serialized body", () => {
   const body = {
     name: "Fido",
@@ -342,6 +387,24 @@ test("an existing Content-Type (generated or auth) is not overridden", () => {
   assert.equal(
     auth.data.operations[0].headers["Content-Type"],
     "application/merge-patch+json",
+  );
+
+  // SPEC-38: the matched media type of a generated non-JSON body declares the
+  // wire form, but an existing Content-Type still wins.
+  const generatedXml = emitScript({
+    config: config(),
+    requests: [
+      request({
+        method: "POST",
+        rawBody: "<root></root>",
+        bodyContentType: "application/xml",
+        headers: { "Content-Type": "application/custom+xml" },
+      }),
+    ],
+  });
+  assert.equal(
+    generatedXml.data.operations[0].headers["Content-Type"],
+    "application/custom+xml",
   );
 });
 

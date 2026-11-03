@@ -245,6 +245,9 @@ paths:
       description: |
         Declares a required multipart/form-data body. The POC handler does not
         parse the multipart body; it only acknowledges a known pet id.
+        SpecWeaver (SPEC-38) generates the body with the fixed
+        specweaver-multipart-boundary and sends the deterministic
+        specweaver-binary-part placeholder for the photo field.
       parameters:
         - name: petId
           in: path

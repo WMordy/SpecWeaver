@@ -180,8 +180,9 @@ export interface EmittedOperation {
   /** Header name -> value, including injected auth headers (A6). */
   headers: Record<string, string>;
   /**
-   * The JSON request body as a serialized string, when the operation declares
-   * one. Stored pre-serialized (rather than as the decoded object) because k6
+   * The request body as a serialized string, when the operation declares one:
+   * the JSON body serialized here (below), or the SPEC-38 non-JSON wire string
+   * carried pre-serialized from generation. Stored pre-serialized because k6
    * does not JSON-serialize object bodies — it form-encodes them — so a nested
    * payload would otherwise be dropped (corrected decision 4).
    */
@@ -686,25 +687,30 @@ function documented2xx(
 }
 
 /**
- * Return `headers` with a JSON `Content-Type` ensured, without overriding an
+ * Return `headers` with a body `Content-Type` ensured, without overriding an
  * existing `Content-Type` (matched case-insensitively).
  *
  * k6 does not JSON-serialize object bodies — it form-encodes them — so the
  * emitter serializes JSON bodies to strings and declares the media type here
- * (corrected decision 4). An existing entry always wins: a header parameter
+ * (corrected decision 4). SPEC-38: a generated non-JSON body carries its own
+ * matched `Content-Type` (with the multipart boundary), preferred over the
+ * JSON default. An existing entry always wins: a header parameter
  * (`Content-Type`) or an auth header (SPEC-5 merges auth last, case-
  * insensitively) therefore keeps its value, consistent with the established
  * collision precedence where auth wins. When added, the header is appended
  * after the existing ones so the output stays deterministic.
  */
-function withJsonContentType(headers: Record<string, string>): Record<string, string> {
+function withBodyContentType(
+  headers: Record<string, string>,
+  contentType: string,
+): Record<string, string> {
   const hasContentType = Object.keys(headers).some(
     (name) => name.toLowerCase() === "content-type",
   );
   if (hasContentType) {
     return headers;
   }
-  return { ...headers, "Content-Type": JSON_CONTENT_TYPE };
+  return { ...headers, "Content-Type": contentType };
 }
 
 /** Build one emitted-operation record from its generated request data. */
@@ -727,10 +733,14 @@ function toEmittedOperation(
         ? []
         : [DEFAULT_EXPECTED_STATUS];
 
-  // SPEC-4 only ever produces a body for an `application/json` media type, so a
-  // present body is by construction a JSON body (corrected decision 4).
-  const hasBody = request.body !== undefined;
+  // SPEC-4 produces a decoded JSON body; SPEC-38 produces a pre-serialized
+  // non-JSON body (`rawBody`) together with its own `Content-Type`. Exactly
+  // one of the two is possible for an operation.
+  const hasJsonBody = request.body !== undefined;
+  const hasRawBody = request.rawBody !== undefined;
+  const hasBody = hasJsonBody || hasRawBody;
   const baseHeaders = request.headers ?? {};
+  const contentType = hasRawBody ? (request.bodyContentType ?? JSON_CONTENT_TYPE) : JSON_CONTENT_TYPE;
 
   const operation: EmittedOperation = {
     method: request.method,
@@ -738,12 +748,14 @@ function toEmittedOperation(
     url: buildRequestUrl(baseUrl, request),
     pathParams: request.pathParams ?? {},
     query: request.query ?? {},
-    headers: hasBody ? withJsonContentType(baseHeaders) : baseHeaders,
+    headers: hasBody ? withBodyContentType(baseHeaders, contentType) : baseHeaders,
     expectedStatus,
     acceptAny2xx: wildcard,
   };
-  if (hasBody) {
+  if (hasJsonBody) {
     operation.body = JSON.stringify(request.body);
+  } else if (hasRawBody) {
+    operation.body = request.rawBody;
   }
   return operation;
 }

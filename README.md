@@ -60,7 +60,7 @@ available in v1 and link to the matching limitation in
 | Results JSON, console summary, per-operation checks | Shipped | Documented-2xx requests pass; everything else fails. |
 | Opt-in `--fail-on-check-failure` gate | Shipped | Check failures are informational by default. |
 | CLI `--vus` / `--duration` / `--out` overrides | Shipped | Override the corresponding YAML values. |
-| Non-JSON body generation (XML, multipart, form-urlencoded) | Deferred | See [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
+| Non-JSON body generation (XML, multipart, form-urlencoded) | Shipped | Generated in the CLI as one wire string with the matched `Content-Type`; fixed multipart boundary, deterministic binary placeholder. Other media types still warn. |
 | Cookie parameters | Shipped | `in: cookie` parameters are generated and sent in one percent-encoded `Cookie` header; array/object values serialize non-exploded (OpenAPI's cookie default is `explode: true`). No cookie jar or `Set-Cookie` handling. |
 | `securitySchemes`-derived auth | Deferred | See [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
 | Per-operation auth | Deferred | See [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
@@ -294,7 +294,7 @@ For every selected operation, the request body comes from the highest-priority
 source that exists:
 
 1. a matching `payloads[].body` override — **whole-body replacement**, not a
-   deep merge;
+   deep merge (replaces generated **JSON** bodies only; see below);
 2. an explicit `example`/`examples` (parameter, media-type, or schema level);
 3. the schema's `default`;
 4. a faker-generated value based on the JSON Schema `type`/`format`.
@@ -305,6 +305,34 @@ method (so `get /pets` and `GET /pets` are equivalent) and keys on `method` +
 `path`. An override supplies a body even when the operation had no generated
 JSON body. An override that matches no selected operation warns on stderr and
 does not fail the run. `payloads` are applied before auth injection.
+
+When the operation's request body declares no JSON media type, a non-JSON body
+is generated for `application/x-www-form-urlencoded`, `multipart/form-data`, or
+`application/xml` (the first supported entry in that fixed order when several
+are declared), and sent **as one wire string** with the matched media type as
+the `Content-Type`:
+
+- **urlencoded** — `key=value` pairs joined by `&`, names and values
+  percent-encoded, in schema property order; array values repeat the key;
+  nested objects serialize as their JSON text.
+- **multipart** — one `Content-Disposition: form-data; name="<name>"` part per
+  property (one part per array item) in property order, separated with the
+  fixed boundary `specweaver-multipart-boundary` (`Content-Type` carries the
+  same boundary) and a trailing closing boundary. A `format: binary` field
+  sends the deterministic placeholder `specweaver-binary-part` — no real file
+  is read or uploaded.
+- **XML** — a `<root>` element wrapping one child element per property in
+  property order, arrays as repeated child elements, nested objects as nested
+  elements, primitives as XML-escaped text nodes. XML attributes, namespaces,
+  and custom root names are not modeled.
+
+Serialization happens in the CLI, so the emitted k6 script stays
+dependency-free; each non-JSON body is computed once and sent unchanged every
+iteration. A `payloads` override that matches an operation with a generated
+non-JSON body is reported as not applied (with the media type named) and the
+generated body is kept — overrides replace generated JSON bodies only. A
+required body declaring **none** of JSON, urlencoded, multipart, and XML is
+sent without a body and produces a coverage warning.
 
 Cookie parameters (`in: cookie`) are generated with the same
 example → `default` → faker chain, required and optional alike, and sent in
@@ -607,11 +635,14 @@ recorded checks only.
 
 ## Coverage warnings
 
-v1 cannot fully model two things. Rather than omit them silently, SpecWeaver
-emits one non-fatal warning per gap per selected operation:
+v1 cannot fully model every part of an OpenAPI document. Rather than omit them
+silently, SpecWeaver emits one non-fatal warning per gap per selected
+operation:
 
-- a **required request body with no JSON media type** (e.g.
-  `application/xml` or `multipart/form-data`), which is sent without a body;
+- a **required request body that declares none of the supported media types**
+  (JSON, urlencoded, multipart, XML — e.g. an `application/x-www-form-urlencoded`
+  variant with parameters, `text/csv`, or `application/octet-stream`), which is
+  sent without a body;
 - **non-empty `security` with no configured `auth`**, which is sent without
   authentication.
 
@@ -625,11 +656,14 @@ classifier is selector-independent: an explicit-list run reports the same gaps
 for its selected operations that an `all` run reports across the catalog.
 
 The
-[`examples/poc-api/specweaver.warnings.config.yaml`](examples/poc-api/specweaver.warnings.config.yaml)
+["examples/poc-api/specweaver.warnings.config.yaml"](examples/poc-api/specweaver.warnings.config.yaml)
 config demonstrates both in one run. Because the unauthenticated
 `GET /admin/stats` returns `401` while the operation documents `200`, its
 informational check fails; the run still exits `0`. The warning demo does not
-hide that real outcome.
+hide that real outcome. The `photo` upload itself no longer warns: its multipart
+body is generated (see [Payload derivation](#payload-derivation)). To see the
+body warning again, point an operation at a media type outside the four
+supported ones.
 
 ## Limitations
 
@@ -644,9 +678,14 @@ means **not available**, not partially supported:
   expressions; matching is exact and case-sensitive (no fuzzy matching). A spec
   path containing a literal `*` cannot be selected explicitly because `*`
   always means a one-segment pattern.
-- **Non-JSON request bodies are deferred.** Multipart, form-urlencoded, XML, and
-  other non-JSON bodies are not generated. A required non-JSON body is sent
-  without a body and produces a warning; optional non-JSON bodies are silent.
+- **Non-JSON bodies outside the four supported media types are deferred.**
+  urlencoded, multipart, and XML bodies are generated (see
+  [Payload derivation](#payload-derivation)); other media types, plus
+  parameterized variants of the supported ones (e.g. `; charset=utf-8`), are
+  not generated. A required unsupported body is sent without a body and
+  produces a warning; optional unsupported bodies are silent. Multipart sends
+  a fixed placeholder for `format: binary` parts, so real file uploads are not
+  exercised.
 - **`securitySchemes`-derived auth is deferred.** Auth is a single global static
   token/headers value; the tool never derives credentials from the spec.
 - **Per-operation auth is deferred.** Configured auth is global to the run.
@@ -662,8 +701,8 @@ means **not available**, not partially supported:
   are emitted on that error path.
 - **An explicit `baseUrl` is trusted verbatim** once it is a non-empty string;
   it bypasses the server-URL usability gate.
-- **Warnings are warn-only.** Auth gaps and non-JSON bodies are surfaced, not
-  repaired.
+- **Warnings are warn-only.** Auth gaps and unsupported request bodies are
+  surfaced, not repaired.
 - **The live e2e is a functional smoke test**, not a performance, capacity, or
   SLA benchmark. The POC API is checked-in example/test infrastructure, not a
   supported production service.

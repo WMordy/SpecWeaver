@@ -65,7 +65,7 @@ available in v1 and link to the matching limitation in
 | `securitySchemes`-derived auth | Deferred | See [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
 | Per-operation auth | Deferred | See [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
 | Remote `http(s)` specs | Deferred | See [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
-| OpenAPI 3.1 `webhooks` cataloguing | Deferred | Components-only and webhooks-only specs load but contribute zero operations; see [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
+| OpenAPI 3.1 `webhooks` cataloguing | Shipped | Catalogued as path operations at `/<webhookName>` after `paths`, selectable like any path operation; k6 plays the API server that sends events, and the base URL stands in for the consumer endpoint. |
 
 ## Contents
 
@@ -275,12 +275,18 @@ unmatched entries. If the loaded specs contribute **zero** catalogued
 operations, an `operations: all` run exits `2` with an `all`-specific message
 and writes no results file.
 
-Only operations declared under `paths` are catalogued. OpenAPI 3.1 allows a
-valid document with only `webhooks` or only `components`; such a spec loads but
+Operations under `paths` are catalogued first; OpenAPI 3.1 `webhooks` entries
+follow. A webhook's operations are catalogued as path operations at
+`/<webhookName>` (a leading `/` is added when missing) and are exercised like
+any path operation: k6 sends webhook-shaped requests to the configured base
+URL — it plays the API server that sends events, and the base URL stands in for the consumer endpoint. They are selectable by
+every shipped selector and treated identically by generation, `payloads`, auth
+injection, emission, and the base-URL gate.
+
+OpenAPI 3.1 still allows a valid components-only document; such a spec loads but
 contributes no operations. SpecWeaver warns on stderr, naming the source and
-stating that 3.1 `webhooks` and components-only documents are not catalogued in
-v1. If that leaves no operation to run, the exit-`2` no-operations path above
-applies.
+stating that a components-only document yields none. If that leaves no
+operation to run, the exit-`2` no-operations path above applies.
 
 ### Payload derivation
 
@@ -646,9 +652,9 @@ means **not available**, not partially supported:
 - **Per-operation auth is deferred.** Configured auth is global to the run.
 - **Remote specs are deferred.** `specs` entries are local filesystem paths
   only; `http(s)://` documents are never fetched.
-- **OpenAPI 3.1 `webhooks` are not catalogued**, and neither are
-  components-only documents. Such specs load but contribute zero operations;
-  under `all` they can lead to the zero-catalog exit `2`.
+- **A components-only 3.1 document yields zero operations.** It loads but
+  catalogues nothing, so it warns and can lead to the zero-catalog exit `2`;
+  webhooks-only documents are catalogued like `paths`.
 - **Unusable `servers[]` entries are skipped with a warning.** Without an
   explicit `baseUrl`, the fallback uses the first usable entry and warns on
   stderr for each distinct entry skipped before it. When none is usable, the run

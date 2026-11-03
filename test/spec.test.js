@@ -9,6 +9,7 @@ import {
   buildOperationCatalog,
   loadSpec,
   loadSpecs,
+  zeroOperationWarnings,
 } from "../dist/spec.js";
 
 /** Create a throwaway directory for spec fixtures. */
@@ -338,6 +339,116 @@ test("the operation catalog is deterministic and covers every operation method",
     first.map((op) => op.method),
     ["GET", "POST", "DELETE"],
   );
+});
+
+test("catalogues OpenAPI 3.1 webhooks as /<name> operations after paths", () => {
+  const document = {
+    openapi: "3.1.0",
+    info: { title: "Hooks", version: "1.0.0" },
+    paths: {
+      "/pets": { get: { responses: {} } },
+    },
+    webhooks: {
+      newPet: {
+        post: { responses: {} },
+        get: { responses: {} },
+      },
+      "/already/slashed": {
+        put: { responses: {} },
+      },
+    },
+  };
+
+  assert.deepEqual(
+    buildOperationCatalog(document).map((op) => `${op.method} ${op.path}`),
+    ["GET /pets", "GET /newPet", "POST /newPet", "PUT /already/slashed"],
+  );
+});
+
+test("webhook operations carry parameters, bodies, and security like path operations", () => {
+  const document = {
+    openapi: "3.1.0",
+    info: { title: "Hooks", version: "1.0.0" },
+    security: [{ bearer: [] }],
+    webhooks: {
+      newPet: {
+        parameters: [{ name: "x-tenant", in: "header" }],
+        post: {
+          operationId: "onNewPet",
+          tags: ["hooks"],
+          parameters: [{ name: "id", in: "path", required: true }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { type: "object" } } },
+          },
+          responses: {},
+        },
+      },
+    },
+  };
+
+  const [operation] = buildOperationCatalog(document);
+
+  assert.equal(operation.method, "POST");
+  assert.equal(operation.path, "/newPet");
+  assert.equal(operation.operationId, "onNewPet");
+  assert.deepEqual(operation.tags, ["hooks"]);
+  assert.deepEqual(
+    operation.parameters.map((parameter) => `${parameter.in}:${parameter.name}`),
+    ["header:x-tenant", "path:id"],
+  );
+  assert.equal(operation.requestBody.required, true);
+  assert.deepEqual(operation.security, [{ bearer: [] }]);
+});
+
+test("a webhooks-only 3.1 spec yields operations and no zero-operation warning", () => {
+  const dir = makeDir();
+  const path = write(
+    dir,
+    "hooks.yaml",
+    `openapi: 3.1.0
+info:
+  title: Hooks
+  version: 1.0.0
+webhooks:
+  newPet:
+    post:
+      responses:
+        '200':
+          description: ok
+`,
+  );
+
+  const spec = loadSpec(path);
+
+  assert.deepEqual(
+    spec.operations.map((operation) => `${operation.method} ${operation.path}`),
+    ["POST /newPet"],
+  );
+  assert.deepEqual(zeroOperationWarnings([spec]), []);
+});
+
+test("zeroOperationWarnings names only components-only documents", () => {
+  const warning = zeroOperationWarnings([
+    { source: "components.json", document: {}, operations: [] },
+  ])[0];
+
+  assert.match(warning, /only `paths` and `webhooks` operations are catalogued/);
+  assert.match(warning, /components-only document yields none/);
+  assert.doesNotMatch(warning, /webhooks.*not catalogued/);
+});
+
+test("OpenAPI 3.0 documents do not catalogue a webhooks member", () => {
+  const document = {
+    openapi: "3.0.3",
+    info: { title: "Hooks", version: "1.0.0" },
+    paths: {},
+    webhooks: {
+      newPet: { post: { responses: {} } },
+    },
+  };
+
+  assert.deepEqual(buildOperationCatalog(document), []);
 });
 
 test("handles circular $ref chains without infinite recursion or crash", () => {

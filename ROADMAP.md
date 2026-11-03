@@ -15,11 +15,11 @@ complete and committed. The P2 zero-override milestone remains complete.
 P4 (SPEC-33…41) covers the capabilities deferred by P2/P3: base-URL fallback
 breadth, `label`/`matrix` path styles, cookies, selectors beyond `all`, OpenAPI
 3.1 `webhooks`, non-JSON bodies, `securitySchemes`-derived and per-operation
-auth, and remote specs. SPEC-33, SPEC-34, and SPEC-36 are done and SPEC-35 is
-implemented and in review. Together they ship the first-usable base-URL
-fallback, `label`/`matrix` path styles, generated and sent cookie parameters, and
-the `operationId`, tags, and path-pattern selectors. The remaining five are
-`todo` skeletons.
+auth, and remote specs. SPEC-33, SPEC-34, SPEC-35, and SPEC-36 are done
+(committed on `master`); SPEC-37 is in progress. Together they ship the
+first-usable base-URL fallback, `label`/`matrix` path styles, generated and sent
+cookie parameters, and the `operationId`, tags, and path-pattern selectors.
+SPEC-37 is in progress; SPEC-38…41 are `todo` tickets.
 
 P0 (correctness and trust) and P1 (proof it works) are both closed and
 committed on `master`. The P0 commits are:
@@ -37,7 +37,7 @@ and the audit's trust gaps were fixed by P0:
    rejected and unmatched overrides warn (SPEC-13).
 2. Missing `specs` or zero matched operations now exit `2` with actionable
    messages and no results file (SPEC-14).
-3. Zero-operation specs (3.1 `webhooks`/components-only) now warn and feed the
+3. Zero-operation specs (components-only in 3.1) now warn and feed the
    exit-`2` no-run path (SPEC-15).
 4. README, config JSDoc, and the sample now match actual behavior (SPEC-16).
 
@@ -274,9 +274,10 @@ Dependencies (resolved):
   stripped when request URLs are composed.
 - **`specs` is local-file-only.** Remote `http(s)://` documents are never
   fetched.
-- **OpenAPI 3.1 `webhooks` are not catalogued**, and neither are
-  components-only documents. Such specs load but contribute zero operations;
-  under `all` they can lead to the zero-catalog exit `2`.
+- **OpenAPI 3.1 `webhooks` were not catalogued at P2 time** (fixed by SPEC-37;
+  they are catalogued as path operations at `/<webhookName>` after `paths`).
+  Components-only documents still load but contribute zero operations; under
+  `all` they can lead to the zero-catalog exit `2`.
 
 ### P3 — adoption and live end-to-end proof (complete)
 
@@ -403,9 +404,9 @@ Claim → evidence → result:
 ### P4 — deferred capability expansion (in progress)
 
 P4 is in progress. Nine skeleton tickets were seeded on 2026-10-24 from a
-roadmap-vs-implementation gap review. SPEC-33, SPEC-34, and SPEC-36 are done and
-SPEC-35 is in review; the remaining five are `todo` and await planner
-elaboration. The order below is the work order; do not reorder it without
+roadmap-vs-implementation gap review. SPEC-33, SPEC-34, SPEC-35, and SPEC-36 are
+done; SPEC-37 is `in_progress` and the remaining four are `todo` and await
+planner elaboration. The order below is the work order; do not reorder it without
 updating this file. Each ticket must be planned before implementation, and docs
 must describe shipped behavior only.
 
@@ -413,9 +414,9 @@ must describe shipped behavior only.
 |---|---|---|---|---|---|
 | 1 | SPEC-33 | `01M5QTK2DF4M4R8BTX6RV905FS` | medium | done | Accept the first usable `servers[]` URL as the base-URL fallback |
 | 2 | SPEC-34 | `01M5QTK52K557BCDRTKWV0N6PS` | low | done | Implement `label` and `matrix` path parameter styles |
-| 3 | SPEC-35 | `01M5QTK8711DW0S5BFN0M78R1D` | medium | in review | Generate and send cookie parameters |
+| 3 | SPEC-35 | `01M5QTK8711DW0S5BFN0M78R1D` | medium | done | Generate and send cookie parameters |
 | 4 | SPEC-36 | `01M5QTKB3GR8JAST4FF8Q35VQN` | high | done | Support operation selectors beyond the `all` literal |
-| 5 | SPEC-37 | `01M5QTKE0SXC7BY1KX6WTCQGRT` | medium | todo | Catalogue OpenAPI 3.1 `webhooks` |
+| 5 | SPEC-37 | `01M5QTKE0SXC7BY1KX6WTCQGRT` | medium | in_progress | Catalogue OpenAPI 3.1 `webhooks` |
 | 6 | SPEC-38 | `01M5QTKGSG573T640BKBVJJ8Q5` | high | todo | Generate non-JSON request bodies |
 | 7 | SPEC-39 | `01M5QTKKJBDDMR0AJV6ENT8661` | high | todo | Derive global auth from `securitySchemes` |
 | 8 | SPEC-40 | `01M5QTKPE005PRTKMFG1DGEFSX` | medium | todo | Add per-operation auth overrides |
@@ -441,7 +442,7 @@ Decisions and resolved behavior:
   percent-encoded; URL composition substitutes these pre-encoded values verbatim
   and keeps encoding raw `simple` path values as before. Unknown path styles
   still fall back to `simple` without a new warning.
-- SPEC-35 (in review) generates every declared `in: cookie` parameter through the
+- SPEC-35 (done) generates every declared `in: cookie` parameter through the
   same seeded example → `default` → faker chain (required and optional alike) and
   sends them in exactly one `Cookie` request header: `name=value` pairs joined by
   `"; "` in declaration order, with names and values percent-encoded. Array and
@@ -459,8 +460,19 @@ Decisions and resolved behavior:
   deduplicated on `METHOD path` first-wins. No-match entries warn per selector
   form; a zero-match selection keeps the SPEC-14 exit-`2` no-run path. Include/
   exclude composition and tolerant matching remain deferred.
-- SPEC-37 must define how a webhook operation is exercised (there is no inbound
-  request path to call).
+- SPEC-37 (in progress) catalogues 3.1 `webhooks` operations after the document's
+  `paths`: each `webhooks.<name>` entry is catalogued exactly like a `paths`
+  entry whose path is `/<name>` (leading `/` added when missing), with the
+  fixed canonical method order. SpecWeaver inverts the webhook direction —
+  load tests **send** webhook-shaped requests **to the configured base URL**
+  (k6 plays the API server; the base URL plays the consumer endpoint) — so
+  selection, generation, `payloads`, auth injection, emission, and the base-URL
+  gate treat webhook operations exactly like path operations. A components-only
+  3.1 document remains the reason a spec contributes zero operations; the
+  zero-operation warning wording was retired accordingly. Only 3.1 documents
+  catalogue the `webhooks` member. Webhook `$ref` resolution beyond the
+  existing local `$ref` support and fetching/validating the real consumer are
+  out of scope.
 - SPEC-38 must define multipart/file-body representation without adding runtime
   dependencies.
 - SPEC-39/40 must preserve explicit-config precedence and secret redaction;
@@ -579,3 +591,18 @@ unless the product owner reopens them. Do not create tickets for them here.
   gallery no longer list cookies as deferred. `npm run build` clean; `npm test`
   344/344 passing, 0 failed, 0 skipped. P4 remains open; the other five tickets
   are untouched.
+- 2026-11-03: SPEC-35 approved and done (committed as `fc43905`).
+- 2026-11-03: SPEC-37 implemented: OpenAPI 3.1 `webhooks` entries are catalogued
+  as path operations at `/<webhookName>` (leading `/` added when missing) after
+  `paths`, in document order with the canonical method order, sharing the
+  `paths` catalogue code path. Webhook operations are exercised as outbound
+  webhook-shaped requests to the configured base URL and flow through
+  selection, generation, `payloads`, auth, emission, and the base-URL gate
+  unchanged. Webhooks-only specs no longer contribute zero operations; the
+  zero-operation warning now names components-only documents as the only
+  remaining cause (`only \`paths\` and \`webhooks\` operations are catalogued`).
+  Only 3.1 documents catalogue a `webhooks` member. README feature table,
+  selection docs, and limitations updated; ROADMAP P2 limitation annotated as
+  fixed and the P4 decision recorded. `npm run build` clean; `npm test`
+  350/350 passing (catalog, selection, warning, and CLI run tests). P4 remains
+  open; the other four tickets are untouched.

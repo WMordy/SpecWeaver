@@ -446,15 +446,22 @@ function toSecurity(operationSecurity: unknown, documentSecurity: unknown): Secu
   return source.filter(isObject) as SecurityRequirement[];
 }
 
-/** Build the normalized operation catalog from a resolved document. */
-export function buildOperationCatalog(document: JsonObject): OperationEntry[] {
-  const paths = document.paths;
-  if (!isObject(paths)) {
-    return [];
+/**
+ * Catalogue the operations of one Path-Item-shaped container (`paths` or 3.1
+ * `webhooks`), appending to `operations` in document order with canonical
+ * method order. `pathFor` maps a container key to the operation's path.
+ */
+function catalogueOperations(
+  container: unknown,
+  pathFor: (key: string) => string,
+  documentSecurity: unknown,
+  operations: OperationEntry[],
+): void {
+  if (!isObject(container)) {
+    return;
   }
 
-  const operations: OperationEntry[] = [];
-  for (const [path, pathItem] of Object.entries(paths)) {
+  for (const [key, pathItem] of Object.entries(container)) {
     if (!isObject(pathItem)) {
       continue;
     }
@@ -468,9 +475,9 @@ export function buildOperationCatalog(document: JsonObject): OperationEntry[] {
 
       const entry: OperationEntry = {
         method: method.toUpperCase(),
-        path,
+        path: pathFor(key),
         parameters: mergeParameters(pathParameters, toParameters(operation.parameters)),
-        security: toSecurity(operation.security, document.security),
+        security: toSecurity(operation.security, documentSecurity),
       };
       if (typeof operation.operationId === "string") {
         entry.operationId = operation.operationId;
@@ -488,6 +495,34 @@ export function buildOperationCatalog(document: JsonObject): OperationEntry[] {
       }
       operations.push(entry);
     }
+  }
+}
+
+/** True for an OpenAPI 3.1.x document, the only version with `webhooks`. */
+function isOpenApi31(document: JsonObject): boolean {
+  return typeof document.openapi === "string" && document.openapi.startsWith("3.1.");
+}
+
+/** A webhook name becomes a path template, gaining a leading `/` when missing. */
+function webhookPath(name: string): string {
+  return name.startsWith("/") ? name : `/${name}`;
+}
+
+/**
+ * Build the normalized operation catalog from a resolved document.
+ *
+ * `paths` operations come first, then — for OpenAPI 3.1 — `webhooks`
+ * operations (SPEC-37). A webhook describes an event the API server sends to
+ * its consumer; SpecWeaver inverts that deterministically: the webhook's
+ * operations are catalogued as path operations at `/<webhookName>` and are
+ * exercised by sending requests to the configured base URL. Downstream stages
+ * therefore treat them exactly like `paths` operations.
+ */
+export function buildOperationCatalog(document: JsonObject): OperationEntry[] {
+  const operations: OperationEntry[] = [];
+  catalogueOperations(document.paths, (path) => path, document.security, operations);
+  if (isOpenApi31(document)) {
+    catalogueOperations(document.webhooks, webhookPath, document.security, operations);
   }
   return operations;
 }
@@ -533,19 +568,19 @@ export function loadSpecs(sources: string[]): LoadedSpec[] {
 /**
  * Non-fatal warnings for loaded specs that contributed no operations (SPEC-15).
  *
- * The catalog is built exclusively from `document.paths`
- * ({@link buildOperationCatalog}). OpenAPI 3.1 permits a valid document with
- * only `webhooks` or only `components`, so such a spec loads successfully yet
- * yields zero operations. Rather than let that pass silently, each zero-catalog
- * source is named in a warning explaining the v1 limitation. Webhooks are not
- * catalogued here; the run-level failure for an empty overall catalog remains
- * the CLI's no-operations path (SPEC-14).
+ * The catalog is built from `document.paths` plus, for OpenAPI 3.1,
+ * `document.webhooks` ({@link buildOperationCatalog}). OpenAPI 3.1 still
+ * permits a valid document with only `components`, so such a spec loads
+ * successfully yet yields zero operations. Rather than let that pass silently,
+ * each zero-catalog source is named in a warning explaining the limitation. The
+ * run-level failure for an empty overall catalog remains the CLI's
+ * no-operations path (SPEC-14).
  */
 export function zeroOperationWarnings(specs: readonly LoadedSpec[]): string[] {
   return specs
     .filter((spec) => spec.operations.length === 0)
     .map(
       (spec) =>
-        `spec "${spec.source}" contributes zero operations: only \`paths\` operations are supported, so OpenAPI 3.1 \`webhooks\` and components-only documents are not catalogued in v1.`,
+        `spec "${spec.source}" contributes zero operations: only \`paths\` and \`webhooks\` operations are catalogued, so a components-only document yields none.`,
     );
 }

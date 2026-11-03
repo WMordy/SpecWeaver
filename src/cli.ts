@@ -253,9 +253,9 @@ async function run(options: CliOptions): Promise<number> {
       throw error;
     }
     // SPEC-15: a spec that loads but contributes no operations (e.g. an
-    // OpenAPI 3.1 document with only `webhooks` or only `components`) is
-    // surfaced immediately. It stays a warning here; if the overall catalog is
-    // empty, the SPEC-14 no-operations path below fails the run instead.
+    // OpenAPI 3.1 components-only document) is surfaced immediately. It stays a
+    // warning here; if the overall catalog is empty, the SPEC-14 no-operations
+    // path below fails the run instead.
     writeWarnings(zeroOperationWarnings(loadedSpecs));
     const catalogSize = loadedSpecs.reduce(
       (total, spec) => total + spec.operations.length,

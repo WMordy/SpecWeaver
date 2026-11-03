@@ -221,3 +221,39 @@ test("repeated runs over identical inputs produce identical selection", () => {
   assert.deepEqual(keys(first), keys(second));
   assert.deepEqual(first.unmatched, second.unmatched);
 });
+
+test("webhook catalog entries are selectable by every selector form", () => {
+  const specs = [
+    loaded("hooks.json", [
+      operation("POST", "/newPet", {
+        operationId: "onNewPet",
+        tags: ["hooks"],
+      }),
+      operation("PUT", "/order/shipped", {
+        operationId: "onShipped",
+        tags: ["orders"],
+      }),
+    ]),
+  ];
+
+  assert.deepEqual(
+    keys(selectOperations([{ method: "POST", path: "/newPet" }], specs)),
+    ["POST /newPet"],
+  );
+  assert.deepEqual(
+    keys(selectOperations([{ path: "/newPet" }], specs)),
+    ["POST /newPet"],
+  );
+  assert.deepEqual(
+    keys(selectOperations([{ path: "/order/**" }], specs)),
+    ["PUT /order/shipped"],
+  );
+  assert.deepEqual(
+    keys(selectOperations([{ operationId: "onShipped" }], specs)),
+    ["PUT /order/shipped"],
+  );
+  assert.deepEqual(keys(selectOperations([{ tags: ["hooks"] }], specs)), [
+    "POST /newPet",
+  ]);
+  assert.deepEqual(keys(selectOperations([{ method: "DELETE", path: "/newPet" }], specs)).length, 0);
+});

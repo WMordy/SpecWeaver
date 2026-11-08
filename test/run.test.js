@@ -12,6 +12,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { Writable } from "node:stream";
 
 import {
   EXIT_K6_RUN_FAILURE,
@@ -21,6 +22,7 @@ import {
   K6NotFoundError,
   K6SpawnError,
   KEEP_TEMP_ENV,
+  createRedactingStream,
   generatedDataPath,
   generatedScriptPath,
   mapK6ExitCode,
@@ -147,6 +149,46 @@ test("runGeneratedTest spawns `k6 run` with --vus/--duration and inherits stdio"
   ]);
   // stdio inheritance is what streams k6 output live (decision 3).
   assert.equal(calls[0].options.stdio, "inherit");
+});
+
+test("runGeneratedTest pipes k6 output when credentials must be redacted", async () => {
+  const { dir } = dirWithExecutable();
+  const scriptPath = generatedScriptPath(dir);
+  writeFileSync(scriptPath, "// generated\n");
+
+  const { impl, calls } = spawnStub(0);
+  await runGeneratedTest({
+    command: "/fake/k6",
+    scriptPath,
+    directory: dir,
+    redact: ["secret"],
+    spawn: impl,
+  });
+
+  assert.deepEqual(calls[0].options.stdio, ["inherit", "pipe", "pipe"]);
+});
+
+test("createRedactingStream masks raw and URI-encoded credentials across chunks", () => {
+  let masked = "";
+  const target = new Writable({
+    write(chunk, _encoding, callback) {
+      masked += chunk.toString();
+      callback();
+    },
+  });
+  const stream = createRedactingStream(target, [
+    "QUERYCRED",
+    "a b",
+    "ab${MISSING}cd",
+  ]);
+
+  stream.write(Buffer.from("Get /f?api_key=QUERY"));
+  stream.write(
+    Buffer.from("CRED&x=a%20b&y=ab%24%7BMISSING%7Dcd and QUERYCRED\n"),
+  );
+  stream.end();
+
+  assert.equal(masked, "Get /f?api_key=***&x=***&y=*** and ***\n");
 });
 
 test("runGeneratedTest maps a non-zero k6 exit to the run-failure code without swallowing it", async () => {

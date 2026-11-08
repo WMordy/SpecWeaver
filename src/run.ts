@@ -27,7 +27,10 @@
  *    removed after the run by default, with an opt-out to keep them for
  *    inspection ({@link KEEP_TEMP_ENV} or the programmatic `keepTemp` option).
  * 3. **Output mode:** streaming via `stdio: 'inherit'` so k6's stdout and
- *    stderr pass through unmodified and in real time (never buffered).
+ *    stderr pass through unmodified and in real time (never buffered). When
+ *    {@link K6RunOptions.redact} is non-empty (SPEC-39: query-string API keys
+ *    appear in k6's error URLs), stdout/stderr are piped through a streaming
+ *    redactor instead, so resolved credentials never reach the console.
  * 4. **No `--k6-path` override:** discovery is PATH lookup only.
  * 5. **Cross-platform lookup:** PATH-based discovery that resolves `k6.exe` on
  *    Windows as well as `k6`.
@@ -53,10 +56,15 @@
  *   that; this module only captures k6's exit code and raw metrics. The exit
  *   codes are the SPEC-8 policy (A5: 0 / 1 / 2).
  */
-import { spawn, type SpawnOptions, type StdioOptions } from "node:child_process";
+import {
+  spawn,
+  type SpawnOptions,
+  type StdioOptions,
+} from "node:child_process";
 import { readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 import {
   EXIT_K6_RUN_FAILURE,
@@ -244,6 +252,13 @@ export interface K6RunOptions {
    * other temp artifacts.
    */
   captureResults?: boolean;
+  /**
+   * Credential values to scrub from k6's streamed stdout/stderr (SPEC-39 AC1).
+   * When non-empty and {@link stdio} is not explicitly set, k6 runs with piped
+   * stdout/stderr so occurrences can be replaced with `***` before reaching the
+   * console. Values are never logged.
+   */
+  redact?: readonly string[];
   /** Injectable spawn implementation (production uses `node:child_process`). */
   spawn?: typeof spawn;
 }
@@ -333,12 +348,83 @@ function removeGeneratedArtifacts(
   }
 }
 
+/** A streaming text writer that masks configured credentials. */
+interface RedactingStream {
+  write(chunk: Buffer): void;
+  end(): void;
+}
+
+/**
+ * Expand credentials with their URI-encoded forms, because k6 prints query
+ * values percent-encoded in transport-error URLs.
+ */
+function redactionVariants(secrets: readonly string[]): string[] {
+  const variants = new Set<string>();
+  for (const secret of secrets) {
+    if (secret === "") {
+      continue;
+    }
+    variants.add(secret);
+    const encoded = encodeURIComponent(secret);
+    variants.add(encoded);
+    variants.add(encoded.replace(/%20/g, "+"));
+    variants.add(encodeURI(secret));
+  }
+  return [...variants];
+}
+
+/**
+ * Build a streaming redactor for one k6 output channel.
+ *
+ * Chunks are decoded with a `StringDecoder` (so a multi-byte character split
+ * across chunks is preserved) and every secret is replaced with `***`. The last
+ * `maxSecretLength - 1` characters are held back until the next chunk, so a
+ * credential split across a chunk boundary is still caught.
+ */
+export function createRedactingStream(
+  target: NodeJS.WritableStream,
+  secrets: readonly string[],
+): RedactingStream {
+  const ordered = redactionVariants(secrets).sort((a, b) => b.length - a.length);
+  const hold = Math.max(0, ...ordered.map((secret) => secret.length - 1));
+  const decoder = new StringDecoder("utf8");
+  let carry = "";
+
+  const mask = (text: string): string => {
+    let masked = text;
+    for (const secret of ordered) {
+      masked = masked.split(secret).join("***");
+    }
+    return masked;
+  };
+
+  return {
+    write(chunk: Buffer): void {
+      const text = mask(carry + decoder.write(chunk));
+      if (text.length <= hold) {
+        carry = text;
+        return;
+      }
+      target.write(text.slice(0, text.length - hold));
+      carry = text.slice(text.length - hold);
+    },
+    end(): void {
+      const text = mask(carry + decoder.end());
+      if (text !== "") {
+        target.write(text);
+      }
+      carry = "";
+    },
+  };
+}
+
 /** Spawn k6 and resolve with its raw exit code/signal; reject on spawn failure. */
 function spawnAndWait(
   spawnImpl: typeof spawn,
   command: string,
   args: string[],
   options: SpawnOptions,
+  secrets: readonly string[],
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   return new Promise((resolve, reject) => {
     let child;
@@ -347,6 +433,15 @@ function spawnAndWait(
     } catch (error) {
       reject(new K6SpawnError(spawnErrorMessage(command, error), { cause: error }));
       return;
+    }
+
+    if (secrets.length > 0 && Array.isArray(options.stdio)) {
+      const stdout = createRedactingStream(process.stdout, secrets);
+      const stderr = createRedactingStream(process.stderr, secrets);
+      child.stdout?.on("data", (chunk: Buffer) => stdout.write(chunk));
+      child.stderr?.on("data", (chunk: Buffer) => stderr.write(chunk));
+      child.stdout?.on("end", () => stdout.end());
+      child.stderr?.on("end", () => stderr.end());
     }
 
     child.on("error", (error: Error) => {
@@ -394,8 +489,13 @@ export async function runGeneratedTest(
     : undefined;
   const args = buildK6Args(scriptPath, options.vus, options.duration, capturePath);
   const spawnImpl = options.spawn ?? spawn;
+  const secrets = (options.redact ?? []).filter(
+    (secret): secret is string => typeof secret === "string" && secret !== "",
+  );
   const spawnOptions: SpawnOptions = {
-    stdio: options.stdio ?? "inherit",
+    stdio:
+      options.stdio ??
+      (secrets.length > 0 ? ["inherit", "pipe", "pipe"] : "inherit"),
     cwd: options.cwd,
     env: options.env,
   };
@@ -407,6 +507,7 @@ export async function runGeneratedTest(
       command,
       args,
       spawnOptions,
+      secrets,
     );
     const result: K6RunResult = {
       exitCode: mapK6ExitCode(code, signal),

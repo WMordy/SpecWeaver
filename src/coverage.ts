@@ -12,11 +12,14 @@
  *    when a required body declares none of those four, so the request is sent
  *    bodiless, including a required body with an empty or missing `content`
  *    map. Optional unsupported bodies never warn.
- * 2. **Declared security without configured auth** — auth is a single global
- *    static value (SPEC-5). If an operation's effective `security` is non-empty
- *    but the resolved auth headers are empty, no auth will be sent; warn once.
- *    An explicit `security: []` never warns, and any configured credential
- *    (including `token: ""`, which still injects a bearer header) suppresses it.
+ * 2. **Declared security that cannot be satisfied** — auth comes from the
+ *    explicit global `auth` plus `securitySchemes`-derived credentials
+ *    (SPEC-39). {@link resolveOperationAuth} classifies every scheme the
+ *    operation's effective `security` references: unsupported types/locations,
+ *    undefined scheme names, and supported-but-unconfigured credentials are
+ *    reported warn-only. An operation that no longer needs a warning (its
+ *    requirement is satisfied, or it declares no security) stays silent, and an
+ *    operation never both warns and receives derived auth.
  *
  * Cookie parameters are generated and sent (SPEC-35), so they are no longer a
  * coverage gap and produce no warning.
@@ -24,11 +27,12 @@
  * ## Contract
  *
  * {@link buildCoverageWarnings} is a **pure** builder: it performs no I/O and
- * accesses no process globals. It takes the already-selected operations and the
- * already-resolved auth headers, so it is unit-testable in isolation. Messages
- * follow the selected-operation order, and within one operation a fixed kind
- * order: required non-JSON body → security without auth. Repeated runs over the
- * same inputs therefore produce identical output.
+ * accesses no process globals. It takes the already-selected operations and
+ * their already-resolved per-operation auth, so it is unit-testable in
+ * isolation. Messages follow the selected-operation order, and within one
+ * operation a fixed kind order: required non-JSON body → resolved-auth
+ * warnings. Repeated runs over the same inputs therefore produce identical
+ * output.
  *
  * This is **warn-and-continue**: a gap never skips an operation, never changes
  * the exit code, and never changes generation. The CLI routes these messages
@@ -42,6 +46,7 @@
  * for its selected operations that an `all` run reports for the whole catalog.
  */
 import type { OperationEntry, RequestBodyObject } from "./spec.js";
+import type { ResolvedOperationAuth } from "./auth.js";
 import {
   MULTIPART_MEDIA_TYPE,
   URLENCODED_MEDIA_TYPE,
@@ -103,49 +108,31 @@ function requiredUnsupportedBodyWarning(
 }
 
 /**
- * Warn once when an operation declares security but no auth is configured (A5).
- *
- * `authHeaders` is the result of resolving the run's validated `auth`; empty
- * means no credential would be injected.
- */
-function securityWithoutAuthWarning(
-  operation: OperationEntry,
-  authHeaders: Readonly<Record<string, string>>,
-): string | undefined {
-  if (
-    operation.security.length === 0 ||
-    Object.keys(authHeaders).length > 0
-  ) {
-    return undefined;
-  }
-
-  return `operation "${operationLabel(operation)}" declares security but no auth is configured; the request will be sent without authentication.`;
-}
-
-/**
  * Build the deterministic coverage-gap warnings for the selected operations.
  *
  * @param operations The operations selected for this run, in selection order.
- * @param authHeaders The headers resolved from the run's validated `auth`
- *   (`resolveAuthHeaders(...).headers`); an empty map means no auth configured.
+ * @param authStates The effective per-operation auth (explicit +
+ *   `securitySchemes`-derived, SPEC-39), aligned with `operations` by index.
+ *   A missing entry is treated as an empty state.
  * @returns One message per gap per operation, in operation order then fixed kind
- *   order (body → security). Pure: no I/O, no process access.
+ *   order (body → auth). Pure: no I/O, no process access.
  */
 export function buildCoverageWarnings(
   operations: readonly OperationEntry[],
-  authHeaders: Readonly<Record<string, string>>,
+  authStates: readonly ResolvedOperationAuth[],
 ): string[] {
   const warnings: string[] = [];
-  for (const operation of operations) {
+  operations.forEach((operation, index) => {
+    const authState = authStates[index];
     const warningsForOperation = [
       requiredUnsupportedBodyWarning(operation),
-      securityWithoutAuthWarning(operation, authHeaders),
+      ...(authState === undefined ? [] : authState.warnings),
     ];
     for (const warning of warningsForOperation) {
       if (warning !== undefined) {
         warnings.push(warning);
       }
     }
-  }
+  });
   return warnings;
 }

@@ -13,28 +13,27 @@
  * Supported auth shapes (all sourced from the typed {@link AuthConfig} — no YAML
  * is re-parsed here):
  * - **Bearer token** (`auth.token`) -> `Authorization: Bearer <token>`.
- * - **API key** -> applied as an HTTP header (A2; query-parameter keys are not
- *   supported in v1).
- * - **Arbitrary static headers** (`auth.headers`) -> applied verbatim.
- *
- * There is deliberately **no dedicated `auth.apiKey` field**: an API key is just
- * a static header expressed through the generic `auth.headers` map, where the
- * map *key* is the configurable header name and the map *value* is the secret —
- * e.g. `auth.headers: { "X-Api-Key": "..." }`. Adding a separate `auth.apiKey`
- * shape is out of scope for v1 (product-owner decision, 2026-10-18).
+ * - **Static headers** (`auth.headers`) -> applied verbatim.
+ * - **`securitySchemes`-derived auth** (SPEC-39): `http`/`bearer` schemes use
+ *   `auth.token`; `apiKey` schemes with `in: header` or `in: query` use the
+ *   credential in `auth.apiKeys[<scheme name>]`. Unsupported or unconfigured
+ *   schemes are warn-only.
  *
  * Locked decisions implemented here:
  * - **A1/A4 — global:** the single configured `auth` is applied to *every*
- *   operation passed in, regardless of the spec's `security`; no
- *   `securitySchemes` -> header mapping is performed.
+ *   operation passed in as the explicit layer. Each selected operation then
+ *   resolves its own effective `security` against its document's
+ *   `securitySchemes` (SPEC-39), adding only the derived wire values.
  * - **A3/A6 — collision precedence:** when an auth header shares a name with a
  *   generated (SPEC-4) header, the auth header wins, compared
  *   case-insensitively. *Within* the auth material itself the bearer token wins
  *   over any `authorization` entry in `auth.headers`, also case-insensitively
- *   (product-owner decision, 2026-10-18).
+ *   (product-owner decision, 2026-10-18). Explicit `auth.token`/`auth.headers`
+ *   also win over derived scheme values on the same wire target (SPEC-39).
  * - **A5 — redaction:** resolved secret values are fully masked (`***`) on every
  *   diagnostic path; only header *names* may be shown. Raw `${ENV_VAR}`-bearing
- *   config values are never emitted either.
+ *   config values are never emitted either. {@link resolveAuthSecrets} supplies
+ *   the values the run stage scrubs from k6's live stream.
  *
  * ## Environment interpolation (intentional double resolution)
  *
@@ -53,6 +52,11 @@
  */
 import type { AuthConfig, Config } from "./config.js";
 import type { GeneratedRequestData } from "./request-data.js";
+import type {
+  OperationEntry,
+  SecurityRequirement,
+  SecuritySchemeObject,
+} from "./spec.js";
 
 /** Mask shown in place of every secret value on diagnostic paths (A5). */
 export const REDACTED = "***";
@@ -88,11 +92,54 @@ export interface AuthInjectionResult {
   warnings: string[];
 }
 
+/**
+ * Per-operation resolved auth (SPEC-39): the explicit global credentials plus
+ * any `securitySchemes`-derived wire values for that operation.
+ *
+ * `headers` and `query` are already de-duplicated and collision-free: explicit
+ * `auth.token`/`auth.headers` win over derived values on the same wire target.
+ * `warnings` are the security-scheme gaps for this operation (unsupported,
+ * undefined, or unconfigured). Never contains a credential value.
+ */
+export interface ResolvedOperationAuth {
+  /** Header name -> value, explicit values first. */
+  headers: Record<string, string>;
+  /** Query parameter name -> value derived from `apiKey` schemes. */
+  query: Record<string, string>;
+  /** Non-fatal scheme warnings for this operation. */
+  warnings: string[];
+}
+
+/** Options for {@link injectAuth}. */
+export interface InjectAuthOptions {
+  /**
+   * The selected operations in the same order as `requests` (SPEC-39). When
+   * omitted, only the explicit global `auth` is applied.
+   */
+  operations?: readonly OperationEntry[];
+  /** Environment for `${ENV_VAR}` resolution. Defaults to `process.env`. */
+  env?: NodeJS.ProcessEnv;
+}
+
 /** `${VAR}` reference; variable names are POSIX-ish identifiers (matches SPEC-2). */
 const ENV_PATTERN = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Read an own property, ignoring `Object.prototype` members. Scheme names come
+ * from the spec, so `constructor`/`toString` must not resolve to inherited
+ * functions.
+ */
+function ownValue<T>(
+  record: Record<string, T> | undefined,
+  key: string,
+): T | undefined {
+  return record !== undefined && Object.hasOwn(record, key)
+    ? record[key]
+    : undefined;
 }
 
 /**
@@ -209,6 +256,48 @@ export function resolveAuthHeaders(
 }
 
 /**
+ * Every configured credential value, resolved from `${ENV_VAR}` references, for
+ * scrubbing k6's live output (SPEC-39 AC1).
+ *
+ * Includes `auth.token`, every `auth.headers` value, and every
+ * `auth.apiKeys` value. Empty values are omitted; unresolved references are
+ * returned literally, because that literal text is what gets sent on the wire.
+ * The returned strings are secrets: callers must only pass them to the stream
+ * redactor, never print them.
+ */
+export function resolveAuthSecrets(
+  auth: AuthConfig | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  if (auth === undefined || !isPlainObject(auth)) {
+    return [];
+  }
+  const secrets = new Set<string>();
+  const add = (value: unknown): void => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const resolved = interpolate(value, "auth", [], env);
+    if (resolved !== "") {
+      secrets.add(resolved);
+    }
+  };
+
+  add(auth.token);
+  if (isPlainObject(auth.headers)) {
+    for (const value of Object.values(auth.headers)) {
+      add(value);
+    }
+  }
+  if (isPlainObject(auth.apiKeys)) {
+    for (const value of Object.values(auth.apiKeys)) {
+      add(value);
+    }
+  }
+  return [...secrets];
+}
+
+/**
  * Merge auth headers into a base header map, case-insensitively (A3/A6).
  *
  * Any base header whose name matches an auth header (ignoring case) is dropped;
@@ -250,27 +339,305 @@ export function withAuthHeaders(
 }
 
 /**
- * Read `config.auth`, resolve it, and inject the resulting headers into every
- * operation's generated request data.
+ * Return a copy of `request` with the resolved auth merged in: headers
+ * case-insensitively (explicit wins) and derived query parameters overriding a
+ * generated parameter of the same name. The input is not mutated.
+ */
+export function withResolvedAuth(
+  request: GeneratedRequestData,
+  auth: ResolvedOperationAuth,
+): GeneratedRequestData {
+  const query = { ...(request.query ?? {}) };
+  for (const [name, value] of Object.entries(auth.query)) {
+    query[name] = value;
+  }
+  return {
+    ...request,
+    headers: mergeAuthHeaders(request.headers ?? {}, auth.headers),
+    query,
+  };
+}
+
+/** `METHOD path`, the operation identity used in auth diagnostics. */
+function operationLabel(operation: OperationEntry): string {
+  return `${operation.method} ${operation.path}`;
+}
+
+/** One requirement's scheme outcome: whether it is satisfiable, and how. */
+interface SchemeResolution {
+  /** True when the scheme's wire target is (or will be) satisfied. */
+  satisfied: boolean;
+  /** Derived header, when the scheme adds one. */
+  header?: [string, string];
+  /** Derived query parameter, when the scheme adds one. */
+  query?: [string, string];
+  /** Deterministic warn-only message when the scheme cannot be satisfied. */
+  warning?: string;
+}
+
+function schemeWarning(
+  operation: OperationEntry,
+  message: string,
+): SchemeResolution {
+  return {
+    satisfied: false,
+    warning: `operation "${operationLabel(operation)}" ${message}`,
+  };
+}
+
+/**
+ * Resolve one security scheme against the configured credentials (SPEC-39).
  *
- * The credential is global (A1): it is applied to every request in `requests`,
- * irrespective of each operation's `security` (A4). When no auth is configured,
- * the requests are returned unchanged. The caller owns how `warnings` are
- * surfaced (SPEC-8).
+ * Supported mappings: `http`/`bearer` (satisfied by `auth.token` or an explicit
+ * `Authorization` header), `apiKey` in a header (satisfied by an explicit
+ * header of that name or `auth.apiKeys`), and `apiKey` in a query (satisfied by
+ * `auth.apiKeys`). Everything else is warn-only.
+ */
+function resolveScheme(
+  operation: OperationEntry,
+  schemeName: string,
+  scheme: SecuritySchemeObject | undefined,
+  auth: AuthConfig | undefined,
+  explicitHeaders: Readonly<Record<string, string>>,
+  env: NodeJS.ProcessEnv,
+  warnings: string[],
+): SchemeResolution {
+  if (scheme === undefined) {
+    return schemeWarning(
+      operation,
+      `security requirement references undefined scheme "${schemeName}"; no auth is sent for it.`,
+    );
+  }
+
+  const hasExplicitHeader = (name: string): boolean =>
+    Object.keys(explicitHeaders).some(
+      (existing) => existing.toLowerCase() === name.toLowerCase(),
+    );
+
+  const type = typeof scheme.type === "string" ? scheme.type : "";
+  if (type === "http") {
+    const httpScheme =
+      typeof scheme.scheme === "string" ? scheme.scheme.toLowerCase() : "";
+    if (httpScheme !== "bearer") {
+      return schemeWarning(
+        operation,
+        `security scheme "${schemeName}" uses unsupported http scheme "${httpScheme || "unknown"}"; only bearer is supported.`,
+      );
+    }
+    if (hasExplicitHeader("Authorization")) {
+      return { satisfied: true };
+    }
+    return schemeWarning(
+      operation,
+      `declares bearer scheme "${schemeName}" but no auth.token is configured; the request will be sent without that credential.`,
+    );
+  }
+
+  if (type === "apiKey") {
+    const location = typeof scheme.in === "string" ? scheme.in : "";
+    const parameter =
+      typeof scheme.name === "string" && scheme.name !== "" ? scheme.name : undefined;
+    if (parameter === undefined) {
+      return schemeWarning(
+        operation,
+        `apiKey scheme "${schemeName}" is missing its parameter name; no auth is sent for it.`,
+      );
+    }
+    if (location === "header") {
+      if (hasExplicitHeader(parameter)) {
+        return { satisfied: true };
+      }
+    } else if (location !== "query") {
+      return schemeWarning(
+        operation,
+        `apiKey scheme "${schemeName}" uses unsupported location "${location || "unknown"}"; only header and query api keys are supported.`,
+      );
+    }
+
+    const credential = ownValue(auth?.apiKeys, schemeName);
+    if (credential === undefined) {
+      return schemeWarning(
+        operation,
+        `declares apiKey scheme "${schemeName}" but no auth.apiKeys.${schemeName} credential is configured; the request will be sent without that credential.`,
+      );
+    }
+    const value = interpolate(
+      credential,
+      `auth.apiKeys.${schemeName}`,
+      warnings,
+      env,
+    );
+    return location === "header"
+      ? { satisfied: true, header: [parameter, value] }
+      : { satisfied: true, query: [parameter, value] };
+  }
+
+  return schemeWarning(
+    operation,
+    `security scheme "${schemeName}" uses unsupported type "${type || "unknown"}"; no auth is sent for it.`,
+  );
+}
+
+/** The explicit global auth, resolved once and shared across operations. */
+function resolveOperationAuthWithExplicit(
+  operation: OperationEntry,
+  auth: AuthConfig | undefined,
+  explicit: ResolvedAuthHeaders,
+  env: NodeJS.ProcessEnv,
+): ResolvedOperationAuth {
+  const headers: Record<string, string> = { ...explicit.headers };
+  const existing = new Set(
+    Object.keys(headers).map((name) => name.toLowerCase()),
+  );
+  const query: Record<string, string> = {};
+  const warnings = [...explicit.warnings];
+
+  if (operation.security.length > 0) {
+    const schemeWarnings: string[] = [];
+    const interpolationWarnings: string[] = [];
+    const requirements: SecurityRequirement[] = operation.security;
+    let satisfiedRequirement:
+      | { headers: Array<[string, string]>; query: Array<[string, string]> }
+      | undefined;
+
+    for (const requirement of requirements) {
+      const resolutions = Object.keys(requirement).map((schemeName) =>
+        resolveScheme(
+          operation,
+          schemeName,
+          ownValue(operation.securitySchemes, schemeName),
+          auth,
+          headers,
+          env,
+          interpolationWarnings,
+        ),
+      );
+      for (const resolution of resolutions) {
+        if (
+          resolution.warning !== undefined &&
+          !schemeWarnings.includes(resolution.warning)
+        ) {
+          schemeWarnings.push(resolution.warning);
+        }
+      }
+      if (resolutions.every((resolution) => resolution.satisfied)) {
+        satisfiedRequirement = {
+          headers: resolutions.flatMap((resolution) =>
+            resolution.header === undefined ? [] : [resolution.header],
+          ),
+          query: resolutions.flatMap((resolution) =>
+            resolution.query === undefined ? [] : [resolution.query],
+          ),
+        };
+        break;
+      }
+    }
+
+    for (const warning of interpolationWarnings) {
+      if (!warnings.includes(warning)) {
+        warnings.push(warning);
+      }
+    }
+
+    if (satisfiedRequirement === undefined) {
+      // No alternative is satisfiable: report each scheme gap once, in
+      // requirement then declaration order. Empty requirements (`{}`, meaning
+      // "no auth required") never reach this branch.
+      for (const warning of schemeWarnings) {
+        if (!warnings.includes(warning)) {
+          warnings.push(warning);
+        }
+      }
+    } else {
+      // Explicit config wins on the same wire target; derived values only fill
+      // the gaps (e.g. an apiKey header/query).
+      for (const [name, value] of satisfiedRequirement.headers) {
+        const lower = name.toLowerCase();
+        if (!existing.has(lower)) {
+          headers[name] = value;
+          existing.add(lower);
+        }
+      }
+      for (const [name, value] of satisfiedRequirement.query) {
+        query[name] = value;
+      }
+    }
+  }
+
+  return { headers, query, warnings };
+}
+
+/**
+ * Resolve the effective auth for one operation (SPEC-39), the shared model
+ * SPEC-40 extends.
+ *
+ * Starts from the explicit global `auth` (SPEC-5) and adds
+ * `securitySchemes`-derived wire values only when the operation's effective
+ * `security` references a supported, configured scheme. Explicit values win on
+ * the same wire target. Empty/no security yields the explicit auth unchanged
+ * and no warnings.
+ *
+ * @param operation The operation, including its document's `securitySchemes`.
+ * @param auth The validated run auth, or `undefined`.
+ * @param env Environment for `${ENV_VAR}` references; defaults to `process.env`.
+ */
+export function resolveOperationAuth(
+  operation: OperationEntry,
+  auth: AuthConfig | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedOperationAuth {
+  return resolveOperationAuthWithExplicit(
+    operation,
+    auth,
+    resolveAuthHeaders(auth, env),
+    env,
+  );
+}
+
+/**
+ * Read `config.auth`, resolve it, and inject the resulting wire values into
+ * every operation's generated request data.
+ *
+ * With `options.operations` (same order as `requests`), each request gets its
+ * per-operation resolved auth (explicit + `securitySchemes`-derived, SPEC-39).
+ * Without it, the explicit global credential is applied to every request
+ * unchanged (the SPEC-5 contract). The caller owns how `warnings` are surfaced.
  */
 export function injectAuth(
   config: Pick<Config, "auth"> | undefined,
   requests: GeneratedRequestData[],
-  env: NodeJS.ProcessEnv = process.env,
+  options: InjectAuthOptions = {},
 ): AuthInjectionResult {
-  const { headers, warnings } = resolveAuthHeaders(config?.auth, env);
-  if (Object.keys(headers).length === 0) {
-    return { requests, warnings };
-  }
-  return {
-    requests: requests.map((request) => withAuthHeaders(request, headers)),
-    warnings,
-  };
+  const env = options.env ?? process.env;
+  const explicit = resolveAuthHeaders(config?.auth, env);
+  const warnings: string[] = [];
+  const seen = new Set<string>();
+
+  const withAuth = requests.map((request, index) => {
+    const operation = options.operations?.[index];
+    const resolved =
+      operation === undefined
+        ? {
+            headers: explicit.headers,
+            query: {},
+            warnings: explicit.warnings,
+          }
+        : resolveOperationAuthWithExplicit(
+            operation,
+            config?.auth,
+            explicit,
+            env,
+          );
+    for (const warning of resolved.warnings) {
+      if (!seen.has(warning)) {
+        seen.add(warning);
+        warnings.push(warning);
+      }
+    }
+    return withResolvedAuth(request, resolved);
+  });
+
+  return { requests: withAuth, warnings };
 }
 
 /**

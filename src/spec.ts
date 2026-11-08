@@ -47,6 +47,24 @@ export interface RequestBodyObject {
 /** An OpenAPI security requirement: scheme name -> scopes. */
 export type SecurityRequirement = Record<string, string[]>;
 
+/**
+ * A resolved `components.securitySchemes` entry (SPEC-39).
+ *
+ * Only the fields auth derivation reads are typed; every OpenAPI field is
+ * preserved on the object. `$ref`s are already resolved by {@link loadSpec}.
+ */
+export interface SecuritySchemeObject {
+  /** `http`, `apiKey`, `oauth2`, `openIdConnect`, or `mutualTLS`. */
+  type?: string;
+  /** For `type: http`, the HTTP auth scheme, e.g. `bearer` or `basic`. */
+  scheme?: string;
+  /** For `type: apiKey`, where the key is carried: `header`, `query`, or `cookie`. */
+  in?: string;
+  /** For `type: apiKey`, the header/query/cookie parameter name. */
+  name?: string;
+  [key: string]: unknown;
+}
+
 /** A single normalized operation, as exposed to downstream tickets. */
 export interface OperationEntry {
   /** Upper-cased HTTP method, e.g. `GET`. */
@@ -67,6 +85,11 @@ export interface OperationEntry {
    * document-level `security`, otherwise an empty list.
    */
   security: SecurityRequirement[];
+  /**
+   * The originating document's resolved `components.securitySchemes`, when it
+   * declares any (SPEC-39). Omitted for documents without schemes.
+   */
+  securitySchemes?: Record<string, SecuritySchemeObject>;
 }
 
 /** The result of loading one local OpenAPI document. */
@@ -455,6 +478,7 @@ function catalogueOperations(
   container: unknown,
   pathFor: (key: string) => string,
   documentSecurity: unknown,
+  securitySchemes: Record<string, SecuritySchemeObject> | undefined,
   operations: OperationEntry[],
 ): void {
   if (!isObject(container)) {
@@ -479,6 +503,9 @@ function catalogueOperations(
         parameters: mergeParameters(pathParameters, toParameters(operation.parameters)),
         security: toSecurity(operation.security, documentSecurity),
       };
+      if (securitySchemes !== undefined) {
+        entry.securitySchemes = securitySchemes;
+      }
       if (typeof operation.operationId === "string") {
         entry.operationId = operation.operationId;
       }
@@ -508,6 +535,23 @@ function webhookPath(name: string): string {
   return name.startsWith("/") ? name : `/${name}`;
 }
 
+/** Resolved `components.securitySchemes`, when the document declares any. */
+function documentSecuritySchemes(
+  document: JsonObject,
+): Record<string, SecuritySchemeObject> | undefined {
+  const components = document.components;
+  if (!isObject(components) || !isObject(components.securitySchemes)) {
+    return undefined;
+  }
+  const schemes: Record<string, SecuritySchemeObject> = {};
+  for (const [name, scheme] of Object.entries(components.securitySchemes)) {
+    if (isObject(scheme)) {
+      schemes[name] = scheme as SecuritySchemeObject;
+    }
+  }
+  return Object.keys(schemes).length > 0 ? schemes : undefined;
+}
+
 /**
  * Build the normalized operation catalog from a resolved document.
  *
@@ -517,12 +561,28 @@ function webhookPath(name: string): string {
  * operations are catalogued as path operations at `/<webhookName>` and are
  * exercised by sending requests to the configured base URL. Downstream stages
  * therefore treat them exactly like `paths` operations.
+ *
+ * Every operation carries its document's resolved `securitySchemes` (SPEC-39)
+ * so auth can be derived per operation without re-reading the spec.
  */
 export function buildOperationCatalog(document: JsonObject): OperationEntry[] {
   const operations: OperationEntry[] = [];
-  catalogueOperations(document.paths, (path) => path, document.security, operations);
+  const securitySchemes = documentSecuritySchemes(document);
+  catalogueOperations(
+    document.paths,
+    (path) => path,
+    document.security,
+    securitySchemes,
+    operations,
+  );
   if (isOpenApi31(document)) {
-    catalogueOperations(document.webhooks, webhookPath, document.security, operations);
+    catalogueOperations(
+      document.webhooks,
+      webhookPath,
+      document.security,
+      securitySchemes,
+      operations,
+    );
   }
   return operations;
 }

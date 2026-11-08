@@ -1227,20 +1227,40 @@ function coverageGapPaths() {
   };
 }
 
-/** Only the SPEC-25 warning lines, in stderr order. */
+/** A full document around {@link coverageGapPaths} carrying the bearer scheme. */
+function coverageGapDocument() {
+  return {
+    openapi: "3.0.3",
+    info: { title: "coverage", version: "1" },
+    servers: [{ url: "http://127.0.0.1:1" }],
+    components: {
+      securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } },
+    },
+    paths: coverageGapPaths(),
+  };
+}
+
+/** Write {@link coverageGapDocument} and return its path. */
+function writeCoverageGapSpec(dir, name = "openapi.json") {
+  const specPath = join(dir, name);
+  writeFileSync(specPath, JSON.stringify(coverageGapDocument()));
+  return specPath;
+}
+
+/** Only the SPEC-25/SPEC-39 warning lines, in stderr order. */
 function coverageWarningLines(stderr) {
   return stderr
     .split("\n")
     .filter(
       (line) =>
         line.startsWith("warning: operation ") &&
-        /(requires a request body|declares security)/.test(line),
+        /(requires a request body|scheme|security requirement)/.test(line),
     );
 }
 
 test("built CLI warns about every coverage gap once and still runs", () => {
   const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
-  const specPath = writePathsSpec(dir, "openapi.json", coverageGapPaths());
+  const specPath = writeCoverageGapSpec(dir);
   const run = runSandboxed(
     dir,
     `specs:\n  - ${specPath}\noperations: all\n`,
@@ -1255,7 +1275,7 @@ test("built CLI warns about every coverage gap once and still runs", () => {
   assert.equal(lines.length, 2, run.result.stderr);
   assert.match(
     lines[0],
-    /^warning: operation "GET \/pets" declares security but no auth is configured/,
+    /^warning: operation "GET \/pets" declares bearer scheme "bearerAuth" but no auth\.token is configured/,
   );
   assert.match(
     lines[1],
@@ -1284,7 +1304,7 @@ test("built CLI warns about every coverage gap once and still runs", () => {
 
 test("coverage warnings are selector-independent and deterministic", () => {
   const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
-  const specPath = writePathsSpec(dir, "openapi.json", coverageGapPaths());
+  const specPath = writeCoverageGapSpec(dir);
 
   const allRun = runSandboxed(
     dir,
@@ -1314,7 +1334,7 @@ test("coverage warnings are selector-independent and deterministic", () => {
 
 test("a configured token, including an empty one, suppresses only the auth warning", () => {
   const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
-  const specPath = writePathsSpec(dir, "openapi.json", coverageGapPaths());
+  const specPath = writeCoverageGapSpec(dir);
   const run = runSandboxed(
     dir,
     `specs:\n  - ${specPath}\noperations: all\nauth:\n  token: ""\n`,
@@ -1324,8 +1344,135 @@ test("a configured token, including an empty one, suppresses only the auth warni
   const lines = coverageWarningLines(run.result.stderr);
   assert.equal(lines.length, 1, run.result.stderr);
   assert.match(lines[0], /requires a request body/);
-  assert.doesNotMatch(run.result.stderr, /declares security/);
+  assert.doesNotMatch(run.result.stderr, /bearer scheme/);
   assert.doesNotMatch(run.result.stderr, /cookie parameter/);
+});
+
+test("built CLI emits securitySchemes-derived headers and query parameters", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = join(dir, "secured.json");
+  writeFileSync(
+    specPath,
+    JSON.stringify({
+      openapi: "3.0.3",
+      info: { title: "secured", version: "1" },
+      servers: [{ url: "http://127.0.0.1:1" }],
+      components: {
+        securitySchemes: {
+          bearerAuth: { type: "http", scheme: "bearer" },
+          headerKey: { type: "apiKey", in: "header", name: "X-Api-Key" },
+          queryKey: { type: "apiKey", in: "query", name: "api_key" },
+        },
+      },
+      paths: {
+        "/secure": {
+          get: {
+            ...apiOperation(),
+            security: [
+              { bearerAuth: [], headerKey: [], queryKey: [] },
+            ],
+          },
+        },
+      },
+    }),
+  );
+  const run = runSandboxed(
+    dir,
+    `specs:\n  - ${specPath}\noperations: all\nauth:\n  token: token-secret\n  headers:\n    x-api-key: explicit-secret\n  apiKeys:\n    headerKey: derived-header-secret\n    queryKey: derived-query-secret\n`,
+    { keepTemp: true },
+  );
+
+  assert.equal(run.result.status, EXIT_SUCCESS, run.result.stderr);
+  assert.doesNotMatch(run.result.stderr, /^warning: operation /m);
+
+  const generated = run.result.stdout.match(/^Generated k6 script: (.+)$/m);
+  assert.ok(generated, `expected a generated-script path:\n${run.result.stdout}`);
+  const data = JSON.parse(
+    readFileSync(join(dirname(generated[1].trim()), "specweaver.data.json"), "utf8"),
+  );
+  const [operation] = data.operations;
+  assert.equal(operation.headers.Authorization, "Bearer token-secret");
+  // Explicit `auth.headers` wins case-insensitively over the derived header.
+  assert.equal(operation.headers["x-api-key"], "explicit-secret");
+  assert.equal("X-Api-Key" in operation.headers, false);
+  // The derived query apiKey is appended under the scheme's parameter name.
+  assert.equal(operation.query.api_key, "derived-query-secret");
+
+  // Credentials never reach diagnostics or the results file.
+  const results = readFileSync(run.resultsPath, "utf8");
+  for (const secret of [
+    "token-secret",
+    "explicit-secret",
+    "derived-header-secret",
+    "derived-query-secret",
+  ]) {
+    assert.ok(!run.result.stdout.includes(secret), `stdout leaked ${secret}`);
+    assert.ok(!run.result.stderr.includes(secret), `stderr leaked ${secret}`);
+    assert.ok(!results.includes(secret), `results leaked ${secret}`);
+  }
+});
+
+test("built CLI scrubs derived query credentials from k6's streamed output", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const binDir = mkdtempSync(join(tmpdir(), "specweaver-bin-"));
+  const sandbox = mkdtempSync(join(tmpdir(), "specweaver-tmp-"));
+  const k6 = join(binDir, "k6");
+  writeFileSync(
+    k6,
+    [
+      "#!/bin/sh",
+      "printf 'Get \"http://127.0.0.1:1/f?api_key=derived-query-secret\": refused\\n' >&2",
+      "printf 'url http://127.0.0.1:1/f?api_key=derived-query-secret\\n'",
+      "exit 0",
+    ].join("\n"),
+  );
+  chmodSync(k6, 0o755);
+
+  const specPath = join(dir, "query-key.json");
+  writeFileSync(
+    specPath,
+    JSON.stringify({
+      openapi: "3.0.3",
+      info: { title: "query-key", version: "1" },
+      servers: [{ url: "http://127.0.0.1:1" }],
+      components: {
+        securitySchemes: {
+          queryKey: { type: "apiKey", in: "query", name: "api_key" },
+        },
+      },
+      paths: {
+        "/f": {
+          get: { ...apiOperation(), security: [{ queryKey: [] }] },
+        },
+      },
+    }),
+  );
+  const configPath = join(dir, "specweaver.yaml");
+  writeFileSync(
+    configPath,
+    `specs:\n  - ${specPath}\noperations: all\nauth:\n  apiKeys:\n    queryKey: derived-query-secret\n`,
+  );
+  const resultsPath = join(dir, "results.json");
+
+  const result = runCli(["--config", configPath, "--out", resultsPath], {
+    env: { ...process.env, PATH: binDir, TMPDIR: sandbox },
+  });
+
+  assert.equal(result.status, EXIT_SUCCESS, result.stderr);
+  assert.match(result.stdout, /api_key=\*\*\*/);
+  assert.match(result.stderr, /api_key=\*\*\*/);
+  assert.ok(
+    !result.stdout.includes("derived-query-secret"),
+    `stdout leaked the credential:\n${result.stdout}`,
+  );
+  assert.ok(
+    !result.stderr.includes("derived-query-secret"),
+    `stderr leaked the credential:\n${result.stderr}`,
+  );
+  assert.ok(
+    !readFileSync(resultsPath, "utf8").includes("derived-query-secret"),
+    "results leaked the credential",
+  );
 });
 
 test("coverage warnings are printed before the base-URL gate aborts the run", () => {
@@ -1338,6 +1485,9 @@ test("coverage warnings are printed before the base-URL gate aborts the run", ()
     JSON.stringify({
       openapi: "3.0.3",
       info: { title: "no-servers", version: "1" },
+      components: {
+        securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } },
+      },
       paths: coverageGapPaths(),
     }),
   );

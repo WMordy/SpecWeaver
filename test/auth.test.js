@@ -8,7 +8,10 @@ import {
   mergeAuthHeaders,
   redactHeaders,
   resolveAuthHeaders,
+  resolveAuthSecrets,
+  resolveOperationAuth,
   withAuthHeaders,
+  withResolvedAuth,
 } from "../dist/auth.js";
 import { generateRequestData } from "../dist/request-data.js";
 
@@ -54,7 +57,8 @@ test("an API key is applied as a header whose name comes from config (A2)", () =
   });
   assert.deepEqual(headers, { "X-Api-Key": "key-456" });
   assert.deepEqual(warnings, []);
-  // Placement is a header, never a query parameter.
+  // The generic headers map only feeds headers; SPEC-39's scheme-derived query
+  // keys are resolved by resolveOperationAuth.
   assert.equal("X-Api-Key" in headers, true);
 });
 
@@ -211,7 +215,7 @@ test("resolution and injection never write secret values to stdout/stderr", () =
     const { requests, warnings } = injectAuth(
       { auth: { token: secret, headers: { "X-Api-Key": "${MISSING}" } } },
       [request()],
-      {},
+      { env: {} },
     );
     assert.equal(requests[0].headers.Authorization, `Bearer ${secret}`);
     assert.equal(warnings.length, 1);
@@ -355,9 +359,243 @@ test("the configured auth is applied globally, regardless of `security` (A1/A4)"
 
 test("no configured auth leaves the generated requests untouched", () => {
   const requests = [request({ headers: { "X-Trace": "gen" } })];
-  const { requests: result, warnings } = injectAuth({}, requests, {});
+  const { requests: result, warnings } = injectAuth({}, requests, { env: {} });
   assert.deepEqual(result, requests);
   assert.deepEqual(warnings, []);
+});
+
+// --- securitySchemes-derived auth (SPEC-39) --------------------------------
+
+const BEARER_SCHEMES = { bearerAuth: { type: "http", scheme: "bearer" } };
+const HEADER_KEY_SCHEMES = {
+  headerKey: { type: "apiKey", in: "header", name: "X-Api-Key" },
+};
+const QUERY_KEY_SCHEMES = {
+  queryKey: { type: "apiKey", in: "query", name: "api_key" },
+};
+
+test("a bearer-scheme operation with auth.token receives Authorization and does not warn", () => {
+  const secured = operation({
+    security: [{ bearerAuth: [] }],
+    securitySchemes: BEARER_SCHEMES,
+  });
+
+  const resolved = resolveOperationAuth(secured, { token: "tok" }, {});
+  assert.deepEqual(resolved.headers, { Authorization: "Bearer tok" });
+  assert.deepEqual(resolved.query, {});
+  assert.deepEqual(resolved.warnings, []);
+});
+
+test("a header apiKey scheme injects the scheme-named header from auth.apiKeys", () => {
+  const secured = operation({
+    security: [{ headerKey: [] }],
+    securitySchemes: HEADER_KEY_SCHEMES,
+  });
+
+  const resolved = resolveOperationAuth(
+    secured,
+    { apiKeys: { headerKey: "key-123" } },
+    {},
+  );
+  assert.deepEqual(resolved.headers, { "X-Api-Key": "key-123" });
+  assert.deepEqual(resolved.query, {});
+  assert.deepEqual(resolved.warnings, []);
+});
+
+test("a query apiKey scheme appends the scheme-named query parameter", () => {
+  const secured = operation({
+    security: [{ queryKey: [] }],
+    securitySchemes: QUERY_KEY_SCHEMES,
+  });
+
+  const resolved = resolveOperationAuth(
+    secured,
+    { apiKeys: { queryKey: "key-456" } },
+    {},
+  );
+  assert.deepEqual(resolved.headers, {});
+  assert.deepEqual(resolved.query, { api_key: "key-456" });
+  assert.deepEqual(resolved.warnings, []);
+});
+
+test("prototype-named schemes never resolve to Object.prototype members", () => {
+  const secured = operation({
+    security: [{ constructor: [] }],
+    securitySchemes: {
+      constructor: { type: "apiKey", in: "header", name: "X-Proto" },
+    },
+  });
+
+  const missing = resolveOperationAuth(
+    secured,
+    { apiKeys: { otherKey: "other" } },
+    {},
+  );
+  assert.deepEqual(missing.headers, {});
+  assert.equal(missing.warnings.length, 1);
+  assert.match(missing.warnings[0], /no auth\.apiKeys\.constructor credential/);
+
+  const configured = resolveOperationAuth(
+    secured,
+    { apiKeys: { constructor: "proto-secret" } },
+    {},
+  );
+  assert.deepEqual(configured.headers, { "X-Proto": "proto-secret" });
+  assert.deepEqual(configured.warnings, []);
+
+  const undeclared = resolveOperationAuth(
+    operation({ security: [{ toString: [] }], securitySchemes: {} }),
+    undefined,
+    {},
+  );
+  assert.equal(undeclared.warnings.length, 1);
+  assert.match(undeclared.warnings[0], /references undefined scheme "toString"/);
+});
+
+test("explicit auth wins over derived values on the same wire target", () => {
+  const secured = operation({
+    security: [{ headerKey: [] }],
+    securitySchemes: HEADER_KEY_SCHEMES,
+  });
+
+  const resolved = resolveOperationAuth(
+    secured,
+    { headers: { "x-api-key": "explicit" }, apiKeys: { headerKey: "derived" } },
+    {},
+  );
+  assert.deepEqual(resolved.headers, { "x-api-key": "explicit" });
+  assert.deepEqual(resolved.warnings, []);
+});
+
+test("unsupported schemes, unsupported locations, and undefined references warn naming the scheme", () => {
+  const documentSchemes = {
+    basicAuth: { type: "http", scheme: "basic" },
+    cookieKey: { type: "apiKey", in: "cookie", name: "session" },
+    oauth: { type: "oauth2", flows: {} },
+    mutual: { type: "mutualTLS" },
+  };
+  const cases = [
+    ["basicAuth", /unsupported http scheme "basic"/],
+    ["cookieKey", /unsupported location "cookie"/],
+    ["oauth", /unsupported type "oauth2"/],
+    ["mutual", /unsupported type "mutualTLS"/],
+  ];
+
+  for (const [schemeName, pattern] of cases) {
+    const secured = operation({
+      security: [{ [schemeName]: [] }],
+      securitySchemes: documentSchemes,
+    });
+    const resolved = resolveOperationAuth(secured, undefined, {});
+    assert.equal(resolved.warnings.length, 1, JSON.stringify(resolved.warnings));
+    assert.match(resolved.warnings[0], new RegExp(`"${schemeName}"`));
+    assert.match(resolved.warnings[0], pattern);
+    assert.deepEqual(resolved.headers, {});
+  }
+
+  const undefinedScheme = operation({
+    security: [{ missing: [] }],
+    securitySchemes: documentSchemes,
+  });
+  const resolved = resolveOperationAuth(undefinedScheme, undefined, {});
+  assert.equal(resolved.warnings.length, 1);
+  assert.match(resolved.warnings[0], /references undefined scheme "missing"/);
+});
+
+test("a supported scheme with no configured credential warns but empty security stays silent", () => {
+  const secured = operation({
+    security: [{ headerKey: [] }],
+    securitySchemes: HEADER_KEY_SCHEMES,
+  });
+  const resolved = resolveOperationAuth(secured, undefined, {});
+  assert.equal(resolved.warnings.length, 1);
+  assert.match(resolved.warnings[0], /"headerKey"/);
+  assert.match(resolved.warnings[0], /no auth\.apiKeys\.headerKey credential/);
+
+  assert.deepEqual(
+    resolveOperationAuth(operation({ security: [] }), { token: "tok" }, {})
+      .warnings,
+    [],
+  );
+  assert.deepEqual(
+    resolveOperationAuth(operation({ security: [] }), undefined, {}).warnings,
+    [],
+  );
+});
+
+test("derived auth resolution is deterministic and warnings never carry a credential", () => {
+  const secured = operation({
+    security: [{ headerKey: [], queryKey: [] }],
+    securitySchemes: { ...HEADER_KEY_SCHEMES, ...QUERY_KEY_SCHEMES },
+  });
+  const auth = { apiKeys: { headerKey: "secret-h", queryKey: "secret-q" } };
+
+  const first = resolveOperationAuth(secured, auth, {});
+  const second = resolveOperationAuth(secured, auth, {});
+  assert.deepEqual(first, second);
+  assert.deepEqual(first.warnings, []);
+  assert.ok(!JSON.stringify(first.warnings).includes("secret-h"));
+  assert.ok(!JSON.stringify(first.warnings).includes("secret-q"));
+});
+
+test("a derived query apiKey replaces a generated parameter of the same name", () => {
+  const merged = withResolvedAuth(
+    request({ query: { api_key: "generated-value", other: "kept" } }),
+    { headers: {}, query: { api_key: "derived-secret" }, warnings: [] },
+  );
+  assert.deepEqual(merged.query, {
+    api_key: "derived-secret",
+    other: "kept",
+  });
+});
+
+test("injectAuth applies both derived headers and query parameters in request order", () => {
+  const secured = operation({
+    security: [{ headerKey: [], queryKey: [] }],
+    securitySchemes: { ...HEADER_KEY_SCHEMES, ...QUERY_KEY_SCHEMES },
+  });
+  const generated = generateRequestData(secured);
+
+  const { requests, warnings } = injectAuth(
+    { auth: { apiKeys: { headerKey: "h", queryKey: "q" } } },
+    [generated],
+    { operations: [secured], env: {} },
+  );
+
+  assert.deepEqual(warnings, []);
+  assert.equal(requests[0].headers["X-Api-Key"], "h");
+  assert.equal(requests[0].query.api_key, "q");
+});
+
+// --- Stream redaction (SPEC-39 AC1) ---------------------------------------
+
+test("resolveAuthSecrets returns every resolved credential once", () => {
+  assert.deepEqual(
+    resolveAuthSecrets(
+      {
+        token: "${TOKEN}",
+        headers: { "X-Client": "client", "X-Trace": "trace" },
+        apiKeys: { headerKey: "header-secret", queryKey: "${QUERY_KEY}" },
+      },
+      { TOKEN: "bearer-secret", QUERY_KEY: "query-secret" },
+    ).sort(),
+    ["bearer-secret", "client", "header-secret", "query-secret", "trace"],
+  );
+});
+
+test("resolveAuthSecrets omits empty values but keeps unresolved literals", () => {
+  assert.deepEqual(
+    resolveAuthSecrets(
+      {
+        token: "${MISSING}",
+        headers: { "X-Empty": "" },
+        apiKeys: { key: "ab${ALSO_MISSING}cd" },
+      },
+      {},
+    ).sort(),
+    ["${MISSING}", "ab${ALSO_MISSING}cd"],
+  );
+  assert.deepEqual(resolveAuthSecrets(undefined, {}), []);
 });
 
 // --- Determinism -----------------------------------------------------------
@@ -375,8 +613,8 @@ test("injected headers and their ordering are deterministic", () => {
   ];
   const env = { TOKEN: "abc" };
 
-  const first = injectAuth(config, requests, env);
-  const second = injectAuth(config, requests, env);
+  const first = injectAuth(config, requests, { env });
+  const second = injectAuth(config, requests, { env });
 
   assert.deepEqual(first.requests, second.requests);
   assert.deepEqual(

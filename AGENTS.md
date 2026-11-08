@@ -20,8 +20,8 @@ the source of truth for ticket status; ROADMAP tables can lag it.
 | `src/spec.ts` | OpenAPI 3.0/3.1 loading, `$ref` resolution (local files), operation cataloguing. |
 | `src/selection.ts` | `operations` expansion: `all`, explicit, `operationId`, tags, path patterns; deterministic union/dedupe and unmatched reporting. |
 | `src/request-data.ts` | Path/query/header/cookie parameter and JSON-body generation, and `payloads` whole-body overrides. |
-| `src/auth.ts` | Global static token/header injection and secret redaction. |
-| `src/coverage.ts` | Non-fatal coverage-gap warnings (unsupported required body, security-without-auth). |
+| `src/auth.ts` | Explicit token/header injection, `securitySchemes`-derived auth, and secret redaction. |
+| `src/coverage.ts` | Non-fatal coverage-gap warnings (unsupported required body, unsatisfiable security schemes). |
 | `src/script/emit.ts` | Emits the dependency-free k6 script plus companion JSON data. |
 | `src/run.ts` | k6 PATH preflight/spawn, streaming output, temp-directory lifecycle. |
 | `src/results.ts` | Results JSON, console summary, warning channel, exit-code policy. |
@@ -65,7 +65,7 @@ k6 rules:
 | File | Covers | Real k6? |
 |---|---|---|
 | `test/config.test.js` | YAML parsing, schema validation, defaults, CLI overrides. | no |
-| `test/auth.test.js` | Token/header injection, collision precedence, redaction, `${ENV_VAR}`. | no |
+| `test/auth.test.js` | Token/header and scheme-derived injection, collision precedence, redaction, `${ENV_VAR}`. | no |
 | `test/request-data.test.js` | Parameter/body generation, example/default/faker chain, payload overrides, `$ref`s. | no |
 | `test/spec.test.js` | OpenAPI loading, internal/external-file `$ref`, catalog ordering, errors. | no |
 | `test/selection.test.js` | Selector expansion: `all`, explicit, `operationId`, tags, path patterns, dedupe, unmatched labels. | no |
@@ -73,7 +73,7 @@ k6 rules:
 | `test/cli.test.js` | Built CLI end-to-end with fake k6: config/selection/base-URL gates/exit codes/temp. | no (stub) |
 | `test/run.test.js` | k6 discovery, spawn failures, temp cleanup. | no (stub) |
 | `test/results.test.js` | NDJSON metrics, per-operation checks, summary, results path, exit policy. | no (stub) |
-| `test/coverage.test.js` | Two warning kinds, ordering, dedupe, selector independence. | no |
+| `test/coverage.test.js` | Warning kinds, ordering, dedupe, selector independence. | no |
 | `test/e2e.test.js` | Built CLI against an in-test HTTP stub server. | yes (skips if absent) |
 | `test/k6-requirement.test.js` | Pure `CI`/`SPECWEAVER_REQUIRE_K6` decision matrix. | no |
 | `test/support/k6-requirement.js` | Shared helper imported by tests (no assertions of its own). | no |
@@ -128,7 +128,10 @@ k6 rules:
   otherwise the run exits `2`.
 - `specs` are local files only; remote `http(s)` URLs are not fetched.
 - Deferred (not shipped): non-JSON media types outside urlencoded/multipart/XML,
-  `securitySchemes`-derived auth, per-operation auth, and remote specs. See
+  per-operation auth overrides, unsupported security schemes (`http` basic/digest,
+  `apiKey` in a cookie, `oauth2`, `openIdConnect`, `mutualTLS`), and remote specs.
+  Supported `securitySchemes` (bearer, `apiKey` header/query) are derived since
+  SPEC-39. See
   [ROADMAP.md](ROADMAP.md).
 
 ## Contracts and docs

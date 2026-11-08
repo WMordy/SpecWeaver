@@ -33,10 +33,12 @@
  *   - path: /pets/*           # path pattern: `*` one segment, `**` remainder
  * # operations: all          # selects every operation in the loaded catalog
  * baseUrl: https://api.example.com  # OPTIONAL, request base URL (overrides the spec's first usable servers[].url; consumed by SPEC-6)
- * auth:                       # OPTIONAL, static token/headers (env-referenceable)
+ * auth:                       # OPTIONAL, static token/headers/api keys (env-referenceable)
  *   token: "${API_TOKEN}"
  *   headers:
  *     X-Api-Key: "${API_KEY}"
+ *   apiKeys:                  # scheme name -> credential (SPEC-39)
+ *     ApiKeyAuth: "${API_KEY}"
  * payloads:                   # OPTIONAL, per-operation JSON body overrides
  *   - method: POST
  *     path: /pets
@@ -101,17 +103,32 @@ export interface LoadConfig {
 /**
  * Static auth values. `${ENV_VAR}` references are interpolated at load time.
  *
- * There is no dedicated `apiKey` field: an API key is expressed as a static
- * header in {@link AuthConfig.headers}, whose key is the configurable header
- * name (e.g. `headers: { "X-Api-Key": "..." }`). A `token` produces
- * `Authorization: Bearer <token>` and, when set, wins over an `authorization`
- * entry in `headers` (case-insensitive). See `auth.ts` (SPEC-5).
+ * Two ways to configure a credential:
+ *
+ * - **Explicit, global** — `token` and `headers`. `token` produces
+ *   `Authorization: Bearer <token>` and, when set, wins over an `authorization`
+ *   entry in `headers` (case-insensitive). Both apply to every selected
+ *   operation regardless of its `security`, preserving the SPEC-5 contract.
+ *   There is no dedicated heterogeneous `apiKey` field: an arbitrary API key is
+ *   a static header in {@link AuthConfig.headers}, whose key is the header name.
+ * - **Scheme-derived** (SPEC-39) — {@link AuthConfig.apiKeys} maps an OpenAPI
+ *   `securitySchemes` name to its credential. Derived auth is only added for
+ *   selected operations whose effective `security` references that scheme, and
+ *   only when the explicit source above does not already provide the same wire
+ *   target. Supported schemes are `http`/`bearer` (uses `token`) and `apiKey`
+ *   with `in: header` or `in: query` (uses `apiKeys`); everything else is
+ *   warn-only. See `auth.ts`.
  */
 export interface AuthConfig {
   /** Bearer/API token value. */
   token?: string;
   /** Static request headers. */
   headers?: Record<string, string>;
+  /**
+   * `securityScheme` name -> credential value (SPEC-39). Names are non-empty;
+   * values are interpolated like every other auth field and never printed.
+   */
+  apiKeys?: Record<string, string>;
 }
 
 /**
@@ -232,7 +249,7 @@ const ROOT_KEYS = new Set([
   "load",
 ]);
 const LOAD_KEYS = new Set(["vus", "duration"]);
-const AUTH_KEYS = new Set(["token", "headers"]);
+const AUTH_KEYS = new Set(["token", "headers", "apiKeys"]);
 /** Fields accepted in an `operations` entry (one selector form per entry). */
 const OPERATION_SELECTOR_KEYS = new Set(["method", "path", "operationId", "tags"]);
 /**
@@ -509,7 +526,7 @@ function validateAuth(
     return undefined;
   }
   if (!isPlainObject(value)) {
-    errors.push("`auth` must be a mapping with optional `token` and `headers`");
+    errors.push("`auth` must be a mapping with optional `token`, `headers`, and `apiKeys`");
     return undefined;
   }
 
@@ -543,6 +560,32 @@ function validateAuth(
         }
       }
       auth.headers = resolved;
+    }
+  }
+
+  if ("apiKeys" in value && value.apiKeys !== undefined) {
+    const apiKeys = value.apiKeys;
+    if (!isPlainObject(apiKeys)) {
+      errors.push(
+        "`auth.apiKeys` must be a mapping of securityScheme names to string values",
+      );
+    } else {
+      const resolved: Record<string, string> = {};
+      for (const [name, credential] of Object.entries(apiKeys)) {
+        if (name.trim() === "") {
+          errors.push("`auth.apiKeys` securityScheme names must be non-empty");
+        } else if (typeof credential !== "string") {
+          // Never render the credential: it may be a secret.
+          errors.push(`\`auth.apiKeys.${name}\` must be a string`);
+        } else {
+          resolved[name] = interpolate(
+            credential,
+            `auth.apiKeys.${name}`,
+            warnings,
+          );
+        }
+      }
+      auth.apiKeys = resolved;
     }
   }
 

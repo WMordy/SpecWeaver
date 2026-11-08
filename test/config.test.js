@@ -536,6 +536,84 @@ auth:
   assert.match(warnings[0], /auth\.token/);
 });
 
+test("auth.apiKeys maps securityScheme names to interpolated credentials", () => {
+  const previous = process.env.SPECWEAVER_TEST_KEY;
+  process.env.SPECWEAVER_TEST_KEY = "key-789";
+  try {
+    const { config, warnings } = parseConfig(
+      `operations:
+  - method: GET
+    path: /pets
+auth:
+  apiKeys:
+    HeaderKey: "\${SPECWEAVER_TEST_KEY}"
+    QueryKey: literal-key
+`,
+    );
+    assert.deepEqual(warnings, []);
+    assert.deepEqual(config.auth.apiKeys, {
+      HeaderKey: "key-789",
+      QueryKey: "literal-key",
+    });
+  } finally {
+    if (previous === undefined) {
+      delete process.env.SPECWEAVER_TEST_KEY;
+    } else {
+      process.env.SPECWEAVER_TEST_KEY = previous;
+    }
+  }
+});
+
+test("an unresolved auth.apiKeys reference warns naming the scheme, not the value", () => {
+  delete process.env.SPECWEAVER_MISSING_KEY;
+  const { config, warnings } = parseConfig(
+    `operations:
+  - method: GET
+    path: /pets
+auth:
+  apiKeys:
+    HeaderKey: "\${SPECWEAVER_MISSING_KEY}"
+`,
+  );
+
+  assert.equal(config.auth.apiKeys.HeaderKey, "${SPECWEAVER_MISSING_KEY}");
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /unresolved environment variable "SPECWEAVER_MISSING_KEY"/);
+  assert.match(warnings[0], /auth\.apiKeys\.HeaderKey/);
+});
+
+test("auth.apiKeys rejects malformed mappings without echoing a value", () => {
+  assert.throws(
+    () => parseConfig("operations: all\nauth:\n  apiKeys: [secret-value]\n"),
+    /`auth\.apiKeys` must be a mapping/,
+  );
+  assert.throws(
+    () =>
+      parseConfig(
+        "operations: all\nauth:\n  apiKeys:\n    HeaderKey:\n      nested: secret-value\n",
+      ),
+    (error) => {
+      assert.match(error.message, /`auth\.apiKeys\.HeaderKey` must be a string/);
+      assert.doesNotMatch(error.message, /secret-value/);
+      return true;
+    },
+  );
+  assert.throws(
+    () => parseConfig('operations: all\nauth:\n  apiKeys:\n    "": value\n'),
+    /securityScheme names must be non-empty/,
+  );
+});
+
+test("unknown auth fields are still rejected alongside apiKeys", () => {
+  assert.throws(
+    () =>
+      parseConfig(
+        "operations: all\nauth:\n  apiKeys:\n    HeaderKey: value\n  apiKey: nope\n",
+      ),
+    /unknown field `auth\.apiKey`/,
+  );
+});
+
 test("HTTP method allow-list matches the documented set", () => {
   for (const method of HTTP_METHODS) {
     const { config } = parseConfig(`operations:\n  - method: ${method}\n    path: /x\n`);

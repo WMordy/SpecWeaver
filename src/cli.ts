@@ -3,7 +3,11 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { CliUsageError, USAGE, parseArgs, type CliOptions } from "./args.js";
-import { injectAuth, resolveAuthHeaders } from "./auth.js";
+import {
+  injectAuth,
+  resolveAuthSecrets,
+  resolveOperationAuth,
+} from "./auth.js";
 import { buildCoverageWarnings } from "./coverage.js";
 import {
   ConfigError,
@@ -330,8 +334,12 @@ async function run(options: CliOptions): Promise<number> {
   // warnings above — but before the SPEC-24 base-URL gate and the SPEC-7 k6
   // preflight, so gaps are reported even when the run later aborts there. The
   // classifier is selector-independent: it sees exactly the selected operations.
-  const coverageAuthHeaders = resolveAuthHeaders(config.auth).headers;
-  writeWarnings(buildCoverageWarnings(selected, coverageAuthHeaders));
+  // SPEC-39 resolves auth per operation (explicit + securitySchemes-derived) so
+  // a satisfied requirement never warns and derived auth is never doubled.
+  const operationAuth = selected.map((operation) =>
+    resolveOperationAuth(operation, config.auth),
+  );
+  writeWarnings(buildCoverageWarnings(selected, operationAuth));
 
   // SPEC-24 base-URL usability gate (A1-A5). Without an explicit `baseUrl`, the
   // request base URL is the first usable `servers[].url` (SPEC-33): entries that
@@ -382,6 +390,7 @@ async function run(options: CliOptions): Promise<number> {
   const { requests, warnings: authWarnings } = injectAuth(
     config,
     overriddenRequests,
+    { operations: selected },
   );
   writeWarnings(authWarnings);
 
@@ -409,6 +418,9 @@ async function run(options: CliOptions): Promise<number> {
       duration: config.load.duration,
       // A3: capture k6's raw NDJSON alongside SPEC-7's live streaming.
       captureResults: true,
+      // SPEC-39 AC1: query-string credentials appear in k6's error URLs, so
+      // scrub every configured credential from the live stream.
+      redact: resolveAuthSecrets(config.auth),
     });
 
     // A results file is produced for both successful and k6-failed runs, as

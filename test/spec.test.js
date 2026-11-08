@@ -282,6 +282,33 @@ paths:
   assert.deepEqual(operation.security, []);
 });
 
+test("catalog carries the document securitySchemes for auth derivation (SPEC-39)", () => {
+  const documented = {
+    openapi: "3.0.3",
+    info: { title: "Sec", version: "1.0.0" },
+    components: {
+      securitySchemes: {
+        bearerAuth: { type: "http", scheme: "bearer" },
+        headerKey: { type: "apiKey", in: "header", name: "X-Api-Key" },
+      },
+    },
+    paths: { "/pets": { get: { responses: {} } } },
+  };
+
+  const [operation] = buildOperationCatalog(documented);
+  assert.deepEqual(operation.securitySchemes, {
+    bearerAuth: { type: "http", scheme: "bearer" },
+    headerKey: { type: "apiKey", in: "header", name: "X-Api-Key" },
+  });
+
+  const [schemeLess] = buildOperationCatalog({
+    openapi: "3.0.3",
+    info: { title: "No schemes", version: "1.0.0" },
+    paths: { "/pets": { get: { responses: {} } } },
+  });
+  assert.equal(schemeLess.securitySchemes, undefined);
+});
+
 test("operation-level parameters override path-level parameters of the same name and location", () => {
   const dir = makeDir();
   const path = write(

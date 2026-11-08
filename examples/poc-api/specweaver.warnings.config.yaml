@@ -8,8 +8,8 @@
 # `operations: all` with no `auth` selects every operation in openapi.yaml.
 # Exactly one `warning:` line is expected on stderr:
 #
-#   1. GET /admin/stats declares bearer security but no auth is configured, so
-#      the request goes out unauthenticated.
+#   1. GET /admin/stats declares bearer scheme "bearerAuth" but no
+#      auth.token is configured, so the request goes out unauthenticated.
 #
 # POST /pets/{petId}/photo no longer warns either: its multipart/form-data body
 # is generated with the fixed boundary (SPEC-38), so the server acknowledges it.

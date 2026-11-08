@@ -15,12 +15,12 @@ complete and committed. The P2 zero-override milestone remains complete.
 P4 (SPEC-33…41) covers the capabilities deferred by P2/P3: base-URL fallback
 breadth, `label`/`matrix` path styles, cookies, selectors beyond `all`, OpenAPI
 3.1 `webhooks`, non-JSON bodies, `securitySchemes`-derived and per-operation
-auth, and remote specs. SPEC-33, SPEC-34, SPEC-35, SPEC-36, and SPEC-37 are
-done and committed on `master`; SPEC-38 is in progress. Together they ship the
-first-usable base-URL fallback, `label`/`matrix` path styles, generated and sent
-cookie parameters, webhook cataloguing, the `operationId`, tags, and
-path-pattern selectors, and generated non-JSON bodies; SPEC-39…41 remain
-`todo`.
+auth, and remote specs. SPEC-33 through SPEC-38 are done and committed on
+`master`; SPEC-39 is done with its changes in the working tree (pending commit).
+Together they ship the first-usable base-URL fallback, `label`/`matrix` path
+styles, generated and sent cookie parameters, webhook cataloguing, the
+`operationId`, tags, and path-pattern selectors, generated non-JSON bodies, and
+`securitySchemes`-derived auth; SPEC-40…41 remain `todo`.
 
 P0 (correctness and trust) and P1 (proof it works) are both closed and
 committed on `master`. The P0 commits are:
@@ -51,9 +51,10 @@ SPEC-21 closed P1 with a verified roadmap refresh.
 P2's first increment — the **zero-override run** — has shipped as SPEC-22…25.
 A config can now supply just `specs` and `operations: all`; the tool selects the
 whole catalog and derives payloads and the request base URL from the OpenAPI
-document. Auth is **not** derived: it stays explicit and global, and a declared
-`security` requirement without configured auth only produces a warning (there is
-no `securitySchemes` mapping). SPEC-22 widened the config schema, SPEC-23
+document. At P2 close auth was **not** derived: it stayed explicit and global,
+and a declared `security` requirement without configured auth only produced a
+warning (there was no `securitySchemes` mapping). SPEC-39 later added supported
+scheme derivation. SPEC-22 widened the config schema, SPEC-23
 expands `all` in deterministic order, SPEC-24 fails loudly on an unusable
 fallback base URL, and SPEC-25 warns on coverage gaps without failing. SPEC-26
 documents the shipped behavior and refreshes this roadmap.
@@ -240,13 +241,13 @@ Dependencies (resolved):
    `payloads` override (whole-body replacement) → explicit example/examples →
    schema `default` → faker by `type`/`format`; required and optional fields are
    always generated. This is now the README's documented behavior, not a plan.
-3. **Broader body/auth support — partially delivered.** Security-scheme-derived
-   auth and per-operation auth are still not implemented; they are surfaced by
-   SPEC-25 warnings for security without configured auth, and
-   security-scheme-derived and per-operation auth remain unimplemented without
-   a dedicated warning. Non-JSON bodies (multipart, form-urlencoded, XML),
-   deferred at P2 close, are generated and sent since SPEC-38. Cookie
-   parameters, deferred at P2 close, are generated and sent since SPEC-35.
+3. **Broader body/auth support — partially delivered.** Supported
+   `securitySchemes` (bearer, `apiKey` header/query) are derived since SPEC-39
+   into the per-operation auth model; unsupported schemes stay warn-only and
+   per-operation overrides remain deferred. Non-JSON bodies (multipart,
+   form-urlencoded, XML), deferred at P2 close, are generated and sent since
+   SPEC-38. Cookie parameters, deferred at P2 close, are generated and sent
+   since SPEC-35.
 
 #### P2 limitations
 
@@ -260,10 +261,12 @@ Dependencies (resolved):
   declaration order. Array/object values serialize non-exploded (`explode`
   treated as `false`, a documented deviation from OpenAPI's cookie default);
   `auth.headers` `Cookie` wins; no warning is emitted.
-- **Auth gaps are warn-only.** Auth is a single global static token/headers
-  value. An operation with non-empty `security` and no configured auth runs
-  without authentication and warns; there is no `securitySchemes` mapping and no
-  per-operation auth.
+- **Auth gaps are warn-only (supported schemes fixed by SPEC-39).** Auth now
+  derives bearer and `apiKey` header/query credentials from an operation's
+  effective `security`, with explicit `auth.token`/`auth.headers` still winning.
+  Unsupported types/locations, undefined scheme names, and supported-but-
+  unconfigured credentials warn and send no auth for that scheme; per-operation
+  auth overrides remain deferred.
 - **Base URL used only the first string fallback entry (fixed by SPEC-33).**
   P2 resolution took the first string `servers[].url` across the specs in `specs`
   order (server-variable defaults substituted), so a relative first entry failed
@@ -287,8 +290,9 @@ P3 is complete and committed as SPEC-27…32. The phase had two outcomes: make
 the shipped tool easy to evaluate and adopt (POC API, runnable examples, README,
 AGENTS.md), and prove the real pipeline in CI by running the built CLI with real
 k6 against the checked-in POC API. P3 adds no new product capabilities;
-selectors beyond `all` and auth derivation remain deferred (cookies were
-deferred at P3 time and shipped later in SPEC-35; non-JSON bodies in SPEC-38).
+selectors beyond `all` and auth derivation were deferred at P3 time (cookies
+shipped later in SPEC-35, non-JSON bodies in SPEC-38, and auth derivation in
+SPEC-39).
 
 | Order | Key | Ticket ID | Priority | Status | Title |
 |---|---|---|---|---|---|
@@ -349,9 +353,10 @@ Claim → evidence → result:
 - `operations: all` is the only selector beyond an explicit list → `src/config.ts`
   accepts only the literal `all` or `{method, path}[]`; README, AGENTS, examples,
   and the P2 outcome label other selectors deferred → **pass**.
-- Auth is never derived from the spec → `src/auth.ts` has no `securitySchemes`
-  mapping; README, AGENTS, samples, and the P2 limitations say auth is explicit
-  and global → **pass**.
+- Auth is never derived from the spec → `src/auth.ts` had no `securitySchemes`
+  mapping at P3 time; README, AGENTS, samples, and the P2 limitations said auth
+  was explicit and global → **pass** (SPEC-39 later added supported-scheme
+  derivation, so this historical claim no longer describes current behavior).
 - Specs are local files only → `src/config.ts`/`src/spec.ts` take local paths;
   README, AGENTS, examples, and the P2 limitations defer remote specs → **pass**.
 - Deferred features are labeled and linked → README feature table, examples
@@ -370,11 +375,11 @@ Claim → evidence → result:
 
 #### P3 limitations / non-goals
 
-- No new product features. Selectors beyond `all`,
-  `securitySchemes`-derived auth, per-operation auth, and remote specs remain
-  deferred and are documented as such in the README and examples gallery.
-  Cookies were also deferred at P3 time; they shipped later in SPEC-35.
-  Non-JSON bodies also shipped later in SPEC-38.
+- No new product features at P3 time. Selectors beyond `all`, per-operation
+  auth, and remote specs remain deferred and are documented as such in the
+  README and examples gallery. Cookies were also deferred at P3 time and
+  shipped later in SPEC-35; non-JSON bodies shipped later in SPEC-38; supported
+  `securitySchemes`-derived auth shipped later in SPEC-39.
 - The live e2e is a functional smoke test against a local, in-memory POC API;
   it is not a performance, capacity, or SLA test, and it does not call public
   internet APIs.
@@ -421,7 +426,7 @@ implementation, and docs must describe shipped behavior only.
 | 4 | SPEC-36 | `01M5QTKB3GR8JAST4FF8Q35VQN` | high | done | Support operation selectors beyond the `all` literal |
 | 5 | SPEC-37 | `01M5QTKE0SXC7BY1KX6WTCQGRT` | medium | done | Catalogue OpenAPI 3.1 `webhooks` |
 | 6 | SPEC-38 | `01M5QTKGSG573T640BKBVJJ8Q5` | high | in_progress | Generate non-JSON request bodies |
-| 7 | SPEC-39 | `01M5QTKKJBDDMR0AJV6ENT8661` | high | todo | Derive global auth from `securitySchemes` |
+| 7 | SPEC-39 | `01M5QTKKJBDDMR0AJV6ENT8661` | high | done | Derive global auth from `securitySchemes` |
 | 8 | SPEC-40 | `01M5QTKPE005PRTKMFG1DGEFSX` | medium | todo | Add per-operation auth overrides |
 | 9 | SPEC-41 | `01M5QTKSARFS9P8RXMTS9BB2AW` | medium | todo | Fetch remote `http(s)` specs |
 
@@ -651,3 +656,19 @@ unless the product owner reopens them. Do not create tickets for them here.
   fixed and the P4 decision recorded. `npm run build` clean; `npm test`
   350/350 passing (catalog, selection, warning, and CLI run tests). P4 remains
   open; the other four tickets are untouched.
+- 2026-11-05: SPEC-39 implemented, reviewed, and marked done (changes pending
+  commit): `auth.apiKeys` maps a
+  securityScheme name to an interpolated credential; selected operations whose
+  effective `security` references a supported scheme get derived wire auth
+  (`http`/bearer from `auth.token`, `apiKey` in a header or query from
+  `auth.apiKeys`). Explicit `auth.token`/`auth.headers` still win on the same
+  wire target. Unsupported types/locations, undefined scheme references, and
+  supported-but-unconfigured credentials warn once per scheme and send no auth
+  for that scheme; empty/`security: []` operations stay silent. `OperationEntry`
+  now carries its document's resolved `securitySchemes`, and
+  `resolveOperationAuth` is the shared per-operation model SPEC-40 extends.
+  k6's live stdout/stderr is scrubbed of configured credentials (raw and
+  URI-encoded), so query-string API keys never reach the console. README,
+  AGENTS.md, ROADMAP, and the examples gallery describe the shipped behavior.
+  `npm run build` clean; `npm test` and `npm run test:live-e2e` green. P4 remains
+  open; the other two tickets are untouched.

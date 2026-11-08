@@ -146,8 +146,10 @@ do not edit the sample.
 - **Path:** [`configs/auth.from-env.yaml`](configs/auth.from-env.yaml) with
   [`poc-api/openapi.yaml`](poc-api/openapi.yaml).
 - **Teaches:** global auth whose token and custom header values are **only**
-  `${ENV_VAR}` references. No literal secret appears in the config. Unresolved
-  references warn and are left literal; they never fail the run.
+  `${ENV_VAR}` references. No literal secret appears in the config. The token
+  also satisfies `/admin/stats`'s `securitySchemes`-derived `bearerAuth`, so that
+  operation emits no scheme warning. Unresolved references warn and are left
+  literal; they never fail the run.
 - **Prerequisites:** common prerequisites and a running POC API.
 - **Variables:**
   - `POC_API_TOKEN` — bearer token. The POC API requires `POC-TOKEN` for
@@ -279,7 +281,7 @@ do not edit the sample.
 - **Expected stderr, exactly one line:**
 
   ```text
-  warning: operation "GET /admin/stats" declares security but no auth is configured; the request will be sent without authentication.
+  warning: operation "GET /admin/stats" declares bearer scheme "bearerAuth" but no auth.token is configured; the request will be sent without that credential.
   ```
 
 - **Expected stdout (key lines, typical):**
@@ -353,7 +355,9 @@ do not edit the sample.
 
 ## Feature-to-example map
 
-Every shipped feature has at least one runnable example.
+The gallery covers the main workflows end-to-end. Capabilities the POC API cannot
+observe (for example a query-string `apiKey`) are documented in the
+[README auth section](../README.md#auth) instead of being demonstrated here.
 
 | Shipped feature | Example |
 |---|---|
@@ -363,11 +367,13 @@ Every shipped feature has at least one runnable example.
 | Explicit `{method, path}` operation list | [Explicit operations + auth + payload](#explicit-operations--global-auth--payload-override), [Auth from env](#auth-from-environment-variables), [Multi-spec](#multi-spec--explicit-baseurl) |
 | Global static bearer token | [Explicit operations + auth + payload](#explicit-operations--global-auth--payload-override), [Auth from env](#auth-from-environment-variables) |
 | Global static headers | [Explicit operations + auth + payload](#explicit-operations--global-auth--payload-override), [Auth from env](#auth-from-environment-variables) |
+| `securitySchemes`-derived bearer auth | [Auth from env](#auth-from-environment-variables) (satisfies `/admin/stats`'s `bearerAuth`, so no scheme warning) |
+| `securitySchemes`-derived header/query `apiKey` | [README auth section](../README.md#auth) (the POC API has no such endpoint) |
 | Whole-body `payloads` override | [Explicit operations + auth + payload](#explicit-operations--global-auth--payload-override) |
 | Multiple local `specs` | [Multi-spec + explicit `baseUrl`](#multi-spec--explicit-baseurl) |
 | Explicit `baseUrl` | [Multi-spec + explicit `baseUrl`](#multi-spec--explicit-baseurl) |
 | Generated `Cookie` header from cookie parameters | [Zero-override](#zero-override-operations-all), [Coverage warnings](#coverage-warnings) |
-| Warning: security without configured auth | [Coverage warnings](#coverage-warnings) |
+| Warning: unsatisfiable security scheme | [Coverage warnings](#coverage-warnings) |
 | Generated multipart body (fixed boundary, placeholder for `format: binary`) | [Coverage warnings](#coverage-warnings) |
 | Machine-readable results file with per-operation checks | All examples (paths above) |
 | CI / command usage | [CI and command snippet](#ci-and-command-snippet) |
@@ -451,15 +457,16 @@ global static token/headers auth with `${ENV_VAR}` resolution, whole-body payloa
 overrides, multiple local specs, explicit `baseUrl`, cookie parameter generation
 (the POC spec's optional `session` cookie is generated and sent), generated
 non-JSON bodies for urlencoded/multipart/XML (SPEC-38; the POC `photo` upload's
-required multipart body is generated in demo), webhooks, the remaining coverage
-warning, and the results JSON. The README also documents the shipped
-`operationId`, `tags`, and path-pattern selector entries; the gallery keeps its
-examples on explicit lists.
+required multipart body is generated in demo), webhooks, `securitySchemes`-derived
+bearer auth (SPEC-39; the README documents the header/query `apiKey` mappings),
+the remaining coverage warning, and the results JSON. The README also documents
+the shipped `operationId`, `tags`, and path-pattern selector entries; the gallery
+keeps its examples on explicit lists.
 
 Deferred and **not** demonstrated or claimed: tolerant/fuzzy method/path
 matching, non-JSON media types outside urlencoded/multipart/XML, `format: binary`
-file uploads (a fixed placeholder is sent), `securitySchemes`-derived auth,
-per-operation auth, and remote `http(s)` specs.
+file uploads (a fixed placeholder is sent), per-operation auth, and remote
+`http(s)` specs.
 
 See the roadmap for the authoritative limitations:
 

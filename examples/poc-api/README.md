@@ -152,7 +152,7 @@ The warnings config selects every operation with no auth. It exits `0` but emits
 exactly this one `warning:` line on stderr:
 
 ```text
-warning: operation "GET /admin/stats" declares security but no auth is configured; the request will be sent without authentication.
+warning: operation "GET /admin/stats" declares bearer scheme "bearerAuth" but no auth.token is configured; the request will be sent without that credential.
 ```
 
 `GET /recommendations` declares an optional `session` cookie parameter; it is

@@ -8,8 +8,9 @@
 # This is the minimal zero-override run: just a spec and `operations: all`.
 # No `auth`, `payloads`, or `baseUrl` are configured. `all` selects every
 # catalogued operation, and SpecWeaver derives request payloads and the request
-# base URL from the OpenAPI document. Auth is not derived: with no `auth`
-# configured, no auth headers are sent. The petstore spec's absolute `servers[].url`
+# base URL from the OpenAPI document. Auth is not derived without credentials:
+# with no `auth` configured, no auth is sent (declared security schemes only
+# produce warnings). The petstore spec's absolute `servers[].url`
 # (`http://localhost:8080`) supplies the base URL, so this config runs without
 # a `baseUrl` here. See README.md's "Zero-override run" section.
 specs:

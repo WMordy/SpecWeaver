@@ -16,7 +16,7 @@ P4 (SPEC-33…41) covers the capabilities deferred by P2/P3: base-URL fallback
 breadth, `label`/`matrix` path styles, cookies, selectors beyond `all`, OpenAPI
 3.1 `webhooks`, non-JSON bodies, `securitySchemes`-derived and per-operation
 auth, and remote specs. SPEC-33 through SPEC-38 are done and committed on
-`master`; SPEC-39 is done with its changes in the working tree (pending commit).
+`master`; SPEC-39 is done and committed.
 Together they ship the first-usable base-URL fallback, `label`/`matrix` path
 styles, generated and sent cookie parameters, webhook cataloguing, the
 `operationId`, tags, and path-pattern selectors, generated non-JSON bodies, and
@@ -656,8 +656,7 @@ unless the product owner reopens them. Do not create tickets for them here.
   fixed and the P4 decision recorded. `npm run build` clean; `npm test`
   350/350 passing (catalog, selection, warning, and CLI run tests). P4 remains
   open; the other four tickets are untouched.
-- 2026-11-05: SPEC-39 implemented, reviewed, and marked done (changes pending
-  commit): `auth.apiKeys` maps a
+- 2026-11-05: SPEC-39 implemented, reviewed, and committed: `auth.apiKeys` maps a
   securityScheme name to an interpolated credential; selected operations whose
   effective `security` references a supported scheme get derived wire auth
   (`http`/bearer from `auth.token`, `apiKey` in a header or query from

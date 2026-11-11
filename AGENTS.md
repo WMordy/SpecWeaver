@@ -20,7 +20,7 @@ the source of truth for ticket status; ROADMAP tables can lag it.
 | `src/spec.ts` | OpenAPI 3.0/3.1 loading, `$ref` resolution (local files), operation cataloguing. |
 | `src/selection.ts` | `operations` expansion: `all`, explicit, `operationId`, tags, path patterns; deterministic union/dedupe and unmatched reporting. |
 | `src/request-data.ts` | Path/query/header/cookie parameter and JSON-body generation, and `payloads` whole-body overrides. |
-| `src/auth.ts` | Explicit token/header injection, `securitySchemes`-derived auth, and secret redaction. |
+| `src/auth.ts` | Explicit token/header injection, per-operation `authOperations` overrides, `securitySchemes`-derived auth, and secret redaction. |
 | `src/coverage.ts` | Non-fatal coverage-gap warnings (unsupported required body, unsatisfiable security schemes). |
 | `src/script/emit.ts` | Emits the dependency-free k6 script plus companion JSON data. |
 | `src/run.ts` | k6 PATH preflight/spawn, streaming output, temp-directory lifecycle. |
@@ -65,7 +65,7 @@ k6 rules:
 | File | Covers | Real k6? |
 |---|---|---|
 | `test/config.test.js` | YAML parsing, schema validation, defaults, CLI overrides. | no |
-| `test/auth.test.js` | Token/header and scheme-derived injection, collision precedence, redaction, `${ENV_VAR}`. | no |
+| `test/auth.test.js` | Token/header and scheme-derived injection, per-operation overrides, collision precedence, redaction, `${ENV_VAR}`. | no |
 | `test/request-data.test.js` | Parameter/body generation, example/default/faker chain, payload overrides, `$ref`s. | no |
 | `test/spec.test.js` | OpenAPI loading, internal/external-file `$ref`, catalog ordering, errors. | no |
 | `test/selection.test.js` | Selector expansion: `all`, explicit, `operationId`, tags, path patterns, dedupe, unmatched labels. | no |
@@ -128,11 +128,11 @@ k6 rules:
   otherwise the run exits `2`.
 - `specs` are local files only; remote `http(s)` URLs are not fetched.
 - Deferred (not shipped): non-JSON media types outside urlencoded/multipart/XML,
-  per-operation auth overrides, unsupported security schemes (`http` basic/digest,
-  `apiKey` in a cookie, `oauth2`, `openIdConnect`, `mutualTLS`), and remote specs.
-  Supported `securitySchemes` (bearer, `apiKey` header/query) are derived since
-  SPEC-39. See
-  [ROADMAP.md](ROADMAP.md).
+  unsupported security schemes (`http` basic/digest, `apiKey` in a cookie,
+  `oauth2`, `openIdConnect`, `mutualTLS`), and remote specs. Supported
+  `securitySchemes` (bearer, `apiKey` header/query) are derived since SPEC-39,
+  and configurable per-operation auth overrides (`authOperations`) since
+  SPEC-40. See [ROADMAP.md](ROADMAP.md).
 
 ## Contracts and docs
 

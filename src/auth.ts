@@ -18,10 +18,16 @@
  *   `auth.token`; `apiKey` schemes with `in: header` or `in: query` use the
  *   credential in `auth.apiKeys[<scheme name>]`. Unsupported or unconfigured
  *   schemes are warn-only.
+ * - **Per-operation overrides** (SPEC-40): `authOperations[]` entries keyed by
+ *   normalized `METHOD path` replace the global explicit `auth` for the matched
+ *   operation's requests. The replacement is whole-surface (the entry's
+ *   `token`/`headers`/`apiKeys` replace the global counterparts, no deep merge),
+ *   and scheme-derived values then resolve against the per-operation surface.
  *
  * Locked decisions implemented here:
- * - **A1/A4 — global:** the single configured `auth` is applied to *every*
- *   operation passed in as the explicit layer. Each selected operation then
+ * - **A1/A4 — global by default:** the single configured `auth` is applied to
+ *   *every* operation passed in as the explicit layer, except operations matched
+ *   by a SPEC-40 `authOperations` override. Each selected operation then
  *   resolves its own effective `security` against its document's
  *   `securitySchemes` (SPEC-39), adding only the derived wire values.
  * - **A3/A6 — collision precedence:** when an auth header shares a name with a
@@ -50,7 +56,11 @@
  * An unresolved reference emits a non-fatal warning — it never throws and never
  * fails validation. SPEC-8 owns its destination (stderr, prefixed `warning:`).
  */
-import type { AuthConfig, Config } from "./config.js";
+import type {
+  AuthConfig,
+  AuthOperationOverride,
+  Config,
+} from "./config.js";
 import type { GeneratedRequestData } from "./request-data.js";
 import type {
   OperationEntry,
@@ -196,18 +206,23 @@ function upsertHeader(
  *   configured (produces no headers).
  * @param env Environment to read `${ENV_VAR}` references from. Defaults to
  *   `process.env`; injectable for tests.
+ * @param at Field-path label used in unresolved-`${ENV_VAR}` warnings. Defaults
+ *   to `"auth"`; a SPEC-40 override passes `authOperations[i]`.
  * @throws {AuthError} when `auth` is malformed (wrong value types). The message
  *   names the offending field and never includes a secret value (A5).
  */
 export function resolveAuthHeaders(
   auth: AuthConfig | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  at = "auth",
 ): ResolvedAuthHeaders {
   if (auth === undefined) {
     return { headers: {}, warnings: [] };
   }
   if (!isPlainObject(auth)) {
-    throw new AuthError("`auth` must be a mapping with optional `token` and `headers`");
+    throw new AuthError(
+      `\`${at}\` must be a mapping with optional \`token\` and \`headers\``,
+    );
   }
 
   const warnings: string[] = [];
@@ -216,11 +231,11 @@ export function resolveAuthHeaders(
   const hasToken = "token" in auth && auth.token !== undefined;
   if (hasToken) {
     if (typeof auth.token !== "string") {
-      throw new AuthError("`auth.token` must be a string");
+      throw new AuthError(`\`${at}.token\` must be a string`);
     }
     // SPEC-2 resolves at config load; re-resolving here is intentional (late-set
     // env vars apply, and a literal `${...}` in a resolved value is re-processed).
-    const token = interpolate(auth.token, "auth.token", warnings, env);
+    const token = interpolate(auth.token, `${at}.token`, warnings, env);
     upsertHeader(entries, "Authorization", `Bearer ${token}`);
   }
 
@@ -228,13 +243,13 @@ export function resolveAuthHeaders(
     const headers = auth.headers;
     if (!isPlainObject(headers)) {
       throw new AuthError(
-        "`auth.headers` must be a mapping of header names to string values",
+        `\`${at}.headers\` must be a mapping of header names to string values`,
       );
     }
     for (const [name, value] of Object.entries(headers)) {
       if (typeof value !== "string") {
         // The value is malformed; never render it (it may be a secret).
-        throw new AuthError(`\`auth.headers.${name}\` must be a string`);
+        throw new AuthError(`\`${at}.headers.${name}\` must be a string`);
       }
       // The bearer token wins over any `authorization` static header
       // (case-insensitive); skip the colliding entry entirely.
@@ -243,7 +258,7 @@ export function resolveAuthHeaders(
       }
       // Re-resolve at injection time — see the module-level note on intentional
       // double interpolation.
-      const resolved = interpolate(value, `auth.headers.${name}`, warnings, env);
+      const resolved = interpolate(value, `${at}.headers.${name}`, warnings, env);
       upsertHeader(entries, name, resolved);
     }
   }
@@ -259,40 +274,48 @@ export function resolveAuthHeaders(
  * Every configured credential value, resolved from `${ENV_VAR}` references, for
  * scrubbing k6's live output (SPEC-39 AC1).
  *
- * Includes `auth.token`, every `auth.headers` value, and every
- * `auth.apiKeys` value. Empty values are omitted; unresolved references are
- * returned literally, because that literal text is what gets sent on the wire.
- * The returned strings are secrets: callers must only pass them to the stream
- * redactor, never print them.
+ * Includes `auth.token`, every `auth.headers` value, every `auth.apiKeys`
+ * value, and (SPEC-40) every per-operation override's equivalents. Empty values
+ * are omitted; unresolved references are returned literally, because that
+ * literal text is what gets sent on the wire. The returned strings are secrets:
+ * callers must only pass them to the stream redactor, never print them.
  */
 export function resolveAuthSecrets(
   auth: AuthConfig | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  authOperations?: readonly AuthOperationOverride[],
 ): string[] {
-  if (auth === undefined || !isPlainObject(auth)) {
-    return [];
-  }
   const secrets = new Set<string>();
-  const add = (value: unknown): void => {
+  const add = (value: unknown, at: string): void => {
     if (typeof value !== "string") {
       return;
     }
-    const resolved = interpolate(value, "auth", [], env);
+    const resolved = interpolate(value, at, [], env);
     if (resolved !== "") {
       secrets.add(resolved);
     }
   };
 
-  add(auth.token);
-  if (isPlainObject(auth.headers)) {
-    for (const value of Object.values(auth.headers)) {
-      add(value);
+  const collect = (surface: AuthConfig | undefined, at: string): void => {
+    if (surface === undefined || !isPlainObject(surface)) {
+      return;
     }
-  }
-  if (isPlainObject(auth.apiKeys)) {
-    for (const value of Object.values(auth.apiKeys)) {
-      add(value);
+    add(surface.token, `${at}.token`);
+    if (isPlainObject(surface.headers)) {
+      for (const [name, value] of Object.entries(surface.headers)) {
+        add(value, `${at}.headers.${name}`);
+      }
     }
+    if (isPlainObject(surface.apiKeys)) {
+      for (const [name, value] of Object.entries(surface.apiKeys)) {
+        add(value, `${at}.apiKeys.${name}`);
+      }
+    }
+  };
+
+  collect(auth, "auth");
+  for (const [index, override] of (authOperations ?? []).entries()) {
+    collect(override, `authOperations[${index}]`);
   }
   return [...secrets];
 }
@@ -363,6 +386,82 @@ function operationLabel(operation: OperationEntry): string {
   return `${operation.method} ${operation.path}`;
 }
 
+/**
+ * The normalized `METHOD path` key shared with operation selection, `payloads`,
+ * and the CLI's per-operation auth matching (SPEC-40).
+ */
+function authOperationKey(method: string, path: string): string {
+  return `${method.toUpperCase()} ${path}`;
+}
+
+/** A matched per-operation auth override plus its config field path. */
+interface MatchedAuthOperation {
+  /** The replacement explicit auth surface. */
+  auth: AuthConfig;
+  /** Diagnostic label prefix, e.g. `authOperations[0]`. */
+  at: string;
+}
+
+/**
+ * Find the SPEC-40 override for one operation, if any.
+ *
+ * Matching is on the normalized `METHOD path` (method case-insensitive), exactly
+ * like `payloads`. Config validation rejects duplicate keys, so first match
+ * wins deterministically.
+ */
+function findAuthOperationOverride(
+  operation: Pick<OperationEntry, "method" | "path">,
+  authOperations: readonly AuthOperationOverride[] | undefined,
+): MatchedAuthOperation | undefined {
+  if (authOperations === undefined || authOperations.length === 0) {
+    return undefined;
+  }
+  const key = authOperationKey(operation.method, operation.path);
+  for (const [index, entry] of authOperations.entries()) {
+    if (authOperationKey(entry.method, entry.path) !== key) {
+      continue;
+    }
+    const auth: AuthConfig = {};
+    if (entry.token !== undefined) {
+      auth.token = entry.token;
+    }
+    if (entry.headers !== undefined) {
+      auth.headers = entry.headers;
+    }
+    if (entry.apiKeys !== undefined) {
+      auth.apiKeys = entry.apiKeys;
+    }
+    return { auth, at: `authOperations[${index}]` };
+  }
+  return undefined;
+}
+
+/**
+ * Warnings for SPEC-40 overrides that matched no selected operation (the
+ * `payloads` contract: never silently drop a configured override). Returns
+ * one deterministically ordered warning per unmatched entry.
+ */
+export function unmatchedAuthOperationWarnings(
+  operations: readonly Pick<OperationEntry, "method" | "path">[],
+  authOperations: readonly AuthOperationOverride[] | undefined,
+): string[] {
+  if (authOperations === undefined || authOperations.length === 0) {
+    return [];
+  }
+  const selected = new Set(
+    operations.map((operation) => authOperationKey(operation.method, operation.path)),
+  );
+  return authOperations
+    .filter(
+      (entry) =>
+        !selected.has(authOperationKey(entry.method, entry.path)),
+    )
+    .map(
+      (entry) =>
+        `auth override for "${authOperationKey(entry.method, entry.path)}" does not match any selected operation; ignoring.`,
+    );
+}
+
 /** One requirement's scheme outcome: whether it is satisfiable, and how. */
 interface SchemeResolution {
   /** True when the scheme's wire target is (or will be) satisfied. */
@@ -401,6 +500,7 @@ function resolveScheme(
   explicitHeaders: Readonly<Record<string, string>>,
   env: NodeJS.ProcessEnv,
   warnings: string[],
+  at: string,
 ): SchemeResolution {
   if (scheme === undefined) {
     return schemeWarning(
@@ -429,7 +529,7 @@ function resolveScheme(
     }
     return schemeWarning(
       operation,
-      `declares bearer scheme "${schemeName}" but no auth.token is configured; the request will be sent without that credential.`,
+      `declares bearer scheme "${schemeName}" but no ${at}.token is configured; the request will be sent without that credential.`,
     );
   }
 
@@ -458,12 +558,12 @@ function resolveScheme(
     if (credential === undefined) {
       return schemeWarning(
         operation,
-        `declares apiKey scheme "${schemeName}" but no auth.apiKeys.${schemeName} credential is configured; the request will be sent without that credential.`,
+        `declares apiKey scheme "${schemeName}" but no ${at}.apiKeys.${schemeName} credential is configured; the request will be sent without that credential.`,
       );
     }
     const value = interpolate(
       credential,
-      `auth.apiKeys.${schemeName}`,
+      `${at}.apiKeys.${schemeName}`,
       warnings,
       env,
     );
@@ -484,6 +584,7 @@ function resolveOperationAuthWithExplicit(
   auth: AuthConfig | undefined,
   explicit: ResolvedAuthHeaders,
   env: NodeJS.ProcessEnv,
+  at = "auth",
 ): ResolvedOperationAuth {
   const headers: Record<string, string> = { ...explicit.headers };
   const existing = new Set(
@@ -510,6 +611,7 @@ function resolveOperationAuthWithExplicit(
           headers,
           env,
           interpolationWarnings,
+          at,
         ),
       );
       for (const resolution of resolutions) {
@@ -585,12 +687,17 @@ export function resolveOperationAuth(
   operation: OperationEntry,
   auth: AuthConfig | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  authOperations?: readonly AuthOperationOverride[],
 ): ResolvedOperationAuth {
+  const match = findAuthOperationOverride(operation, authOperations);
+  const surfaceAuth = match?.auth ?? auth;
+  const at = match?.at ?? "auth";
   return resolveOperationAuthWithExplicit(
     operation,
-    auth,
-    resolveAuthHeaders(auth, env),
+    surfaceAuth,
+    resolveAuthHeaders(surfaceAuth, env, at),
     env,
+    at,
   );
 }
 
@@ -604,17 +711,23 @@ export function resolveOperationAuth(
  * unchanged (the SPEC-5 contract). The caller owns how `warnings` are surfaced.
  */
 export function injectAuth(
-  config: Pick<Config, "auth"> | undefined,
+  config: Pick<Config, "auth" | "authOperations"> | undefined,
   requests: GeneratedRequestData[],
   options: InjectAuthOptions = {},
 ): AuthInjectionResult {
   const env = options.env ?? process.env;
-  const explicit = resolveAuthHeaders(config?.auth, env);
   const warnings: string[] = [];
   const seen = new Set<string>();
 
   const withAuth = requests.map((request, index) => {
     const operation = options.operations?.[index];
+    const match =
+      operation === undefined
+        ? undefined
+        : findAuthOperationOverride(operation, config?.authOperations);
+    const surfaceAuth = match?.auth ?? config?.auth;
+    const at = match?.at ?? "auth";
+    const explicit = resolveAuthHeaders(surfaceAuth, env, at);
     const resolved =
       operation === undefined
         ? {
@@ -624,9 +737,10 @@ export function injectAuth(
           }
         : resolveOperationAuthWithExplicit(
             operation,
-            config?.auth,
+            surfaceAuth,
             explicit,
             env,
+            at,
           );
     for (const warning of resolved.warnings) {
       if (!seen.has(warning)) {

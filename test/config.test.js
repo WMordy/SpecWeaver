@@ -614,6 +614,112 @@ test("unknown auth fields are still rejected alongside apiKeys", () => {
   );
 });
 
+test("authOperations parse into typed per-operation overrides", () => {
+  const { config, warnings } = parseConfig(
+    `operations:
+  - method: GET
+    path: /pets
+authOperations:
+  - method: post
+    path: /admin
+    token: admin-token
+  - method: get
+    path: /pets
+    headers:
+      X-Admin: "yes"
+    apiKeys:
+      AdminKey: admin-key
+`,
+  );
+
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(config.authOperations, [
+    { method: "POST", path: "/admin", token: "admin-token" },
+    {
+      method: "GET",
+      path: "/pets",
+      headers: { "X-Admin": "yes" },
+      apiKeys: { AdminKey: "admin-key" },
+    },
+  ]);
+});
+
+test("authOperations reject malformed entries with aggregated field labels", () => {
+  assert.throws(
+    () => parseConfig("operations: all\nauthOperations: {}\n"),
+    /`authOperations` must be a list/,
+  );
+  assert.throws(
+    () =>
+      parseConfig(
+        "operations: all\nauthOperations:\n  - method: GET\n    path: /pets\n",
+      ),
+    /`authOperations\[0\]` must define at least one of `token`, `headers`, or `apiKeys`/,
+  );
+  assert.throws(
+    () =>
+      parseConfig(
+        "operations: all\nauthOperations:\n  - method: GET\n    path: /pets\n    token: x\n    query: { a: b }\n",
+      ),
+    /unknown field `authOperations\[0\]\.query`/,
+  );
+  assert.throws(
+    () =>
+      parseConfig(
+        "operations: all\nauthOperations:\n  - method: TRACE\n    path: /pets\n    token: x\n",
+      ),
+    /`authOperations\[0\]\.method` must be one of/,
+  );
+  assert.throws(
+    () =>
+      parseConfig(
+        "operations: all\nauthOperations:\n  - method: GET\n    path: /pets\n    token: 123\n",
+      ),
+    /`authOperations\[0\]\.token` must be a string/,
+  );
+});
+
+test("authOperations reject duplicate normalized keys", () => {
+  assert.throws(
+    () =>
+      parseConfig(
+        `operations: all
+authOperations:
+  - method: POST
+    path: /pets
+    token: one
+  - method: post
+    path: /pets
+    token: two
+`,
+      ),
+    /duplicate auth operation override `POST \/pets`/,
+  );
+});
+
+test("unresolved authOperations references warn with their entry path", () => {
+  delete process.env.SPECWEAVER_MISSING_OVERRIDE;
+  const { config, warnings } = parseConfig(
+    `operations: all
+authOperations:
+  - method: GET
+    path: /pets
+    token: "\${SPECWEAVER_MISSING_OVERRIDE}"
+`,
+  );
+
+  assert.equal(
+    config.authOperations[0].token,
+    "${SPECWEAVER_MISSING_OVERRIDE}",
+  );
+  assert.equal(warnings.length, 1);
+  assert.match(
+    warnings[0],
+    /unresolved environment variable "SPECWEAVER_MISSING_OVERRIDE"/,
+  );
+  assert.match(warnings[0], /authOperations\[0\]\.token/);
+});
+
 test("HTTP method allow-list matches the documented set", () => {
   for (const method of HTTP_METHODS) {
     const { config } = parseConfig(`operations:\n  - method: ${method}\n    path: /x\n`);

@@ -20,7 +20,8 @@ auth, and remote specs. SPEC-33 through SPEC-38 are done and committed on
 Together they ship the first-usable base-URL fallback, `label`/`matrix` path
 styles, generated and sent cookie parameters, webhook cataloguing, the
 `operationId`, tags, and path-pattern selectors, generated non-JSON bodies, and
-`securitySchemes`-derived auth; SPEC-40…41 remain `todo`.
+`securitySchemes`-derived auth and per-operation `authOperations` overrides;
+SPEC-41 remains `todo`.
 
 P0 (correctness and trust) and P1 (proof it works) are both closed and
 committed on `master`. The P0 commits are:
@@ -241,10 +242,11 @@ Dependencies (resolved):
    `payloads` override (whole-body replacement) → explicit example/examples →
    schema `default` → faker by `type`/`format`; required and optional fields are
    always generated. This is now the README's documented behavior, not a plan.
-3. **Broader body/auth support — partially delivered.** Supported
+3. **Broader body/auth support — largely delivered.** Supported
    `securitySchemes` (bearer, `apiKey` header/query) are derived since SPEC-39
-   into the per-operation auth model; unsupported schemes stay warn-only and
-   per-operation overrides remain deferred. Non-JSON bodies (multipart,
+   into the per-operation auth model; per-operation overrides (`authOperations`)
+   replace the global explicit surface for matched operations since SPEC-40;
+   unsupported schemes stay warn-only. Non-JSON bodies (multipart,
    form-urlencoded, XML), deferred at P2 close, are generated and sent since
    SPEC-38. Cookie parameters, deferred at P2 close, are generated and sent
    since SPEC-35.
@@ -261,12 +263,13 @@ Dependencies (resolved):
   declaration order. Array/object values serialize non-exploded (`explode`
   treated as `false`, a documented deviation from OpenAPI's cookie default);
   `auth.headers` `Cookie` wins; no warning is emitted.
-- **Auth gaps are warn-only (supported schemes fixed by SPEC-39).** Auth now
-  derives bearer and `apiKey` header/query credentials from an operation's
-  effective `security`, with explicit `auth.token`/`auth.headers` still winning.
+- **Auth gaps are warn-only (supported schemes fixed by SPEC-39; per-operation
+  overrides fixed by SPEC-40).** Auth now derives bearer and `apiKey`
+  header/query credentials from an operation's effective `security`, with
+  explicit `auth.token`/`auth.headers` still winning; a matching
+  `authOperations` entry replaces that global explicit surface wholesale.
   Unsupported types/locations, undefined scheme names, and supported-but-
-  unconfigured credentials warn and send no auth for that scheme; per-operation
-  auth overrides remain deferred.
+  unconfigured credentials warn and send no auth for that scheme.
 - **Base URL used only the first string fallback entry (fixed by SPEC-33).**
   P2 resolution took the first string `servers[].url` across the specs in `specs`
   order (server-variable defaults substituted), so a relative first entry failed
@@ -427,7 +430,7 @@ implementation, and docs must describe shipped behavior only.
 | 5 | SPEC-37 | `01M5QTKE0SXC7BY1KX6WTCQGRT` | medium | done | Catalogue OpenAPI 3.1 `webhooks` |
 | 6 | SPEC-38 | `01M5QTKGSG573T640BKBVJJ8Q5` | high | in_progress | Generate non-JSON request bodies |
 | 7 | SPEC-39 | `01M5QTKKJBDDMR0AJV6ENT8661` | high | done | Derive global auth from `securitySchemes` |
-| 8 | SPEC-40 | `01M5QTKPE005PRTKMFG1DGEFSX` | medium | todo | Add per-operation auth overrides |
+| 8 | SPEC-40 | `01M5QTKPE005PRTKMFG1DGEFSX` | medium | done | Add per-operation auth overrides |
 | 9 | SPEC-41 | `01M5QTKSARFS9P8RXMTS9BB2AW` | medium | todo | Fetch remote `http(s)` specs |
 
 Dependencies and sequencing:
@@ -671,3 +674,15 @@ unless the product owner reopens them. Do not create tickets for them here.
   AGENTS.md, ROADMAP, and the examples gallery describe the shipped behavior.
   `npm run build` clean; `npm test` and `npm run test:live-e2e` green. P4 remains
   open; the other two tickets are untouched.
+- 2026-11-11: SPEC-40 implemented, reviewed, and `done`:
+  `authOperations[]` entries keyed
+  by normalized `METHOD path` fully replace the global explicit `auth` surface
+  for matched requests, then SPEC-39's `securitySchemes` mappings resolve
+  against that override. Validation mirrors `payloads` (method allow-list,
+  non-empty path, at least one auth field, unknown fields and duplicate keys
+  rejected with `authOperations[i]` labels). Unmatched overrides warn on stderr,
+  including the no-`specs` and zero-selection paths. Override credentials are
+  included in stream redaction. README, config JSDoc, AGENTS, examples, and
+  ROADMAP updated; config/auth/CLI tests added. `npm run build` clean;
+  `npm test` and `npm run test:live-e2e` green. P4 remains open; SPEC-41 is
+  untouched.

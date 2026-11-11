@@ -264,16 +264,24 @@ payloads:
     path: /pets
     body:
       name: Rex
+authOperations:
+  - method: GET
+    path: /admin
+    token: admin-token
 `,
   );
 
-  // No `specs` => the run cannot execute anything. The override cannot be
-  // applied, so it must still be reported rather than silently lost.
+  // No `specs` => the run cannot execute anything. The overrides cannot be
+  // applied, so they must still be reported rather than silently lost.
   const result = runCli(["--config", configPath, "--out", resultsPath]);
   assert.equal(result.status, EXIT_SPECWEAVER_ERROR, result.stderr);
   assert.match(
     result.stderr,
     /warning: payload override for "POST \/pets" does not match any selected operation/,
+  );
+  assert.match(
+    result.stderr,
+    /warning: auth override for "GET \/admin" does not match any selected operation/,
   );
   assert.equal(existsSync(resultsPath), false);
 });
@@ -297,6 +305,10 @@ payloads:
     path: /pets
     body:
       name: Rex
+authOperations:
+  - method: POST
+    path: /pets
+    token: admin-token
 `,
   );
 
@@ -305,10 +317,14 @@ payloads:
   assert.match(result.stderr, /none of the configured operations were found/);
   assert.match(result.stderr, /- GET \/missing/);
   assert.match(result.stderr, /- POST \/also-missing/);
-  // SPEC-13 payload warnings still fire on the no-run path.
+  // SPEC-13/SPEC-40 warnings still fire on the no-run path.
   assert.match(
     result.stderr,
     /warning: payload override for "POST \/pets" does not match any selected operation/,
+  );
+  assert.match(
+    result.stderr,
+    /warning: auth override for "POST \/pets" does not match any selected operation/,
   );
   assert.doesNotMatch(result.stdout, /No operations to run/);
   assert.doesNotMatch(result.stdout, /SpecWeaver run summary/);
@@ -1405,6 +1421,99 @@ test("built CLI emits securitySchemes-derived headers and query parameters", () 
     "explicit-secret",
     "derived-header-secret",
     "derived-query-secret",
+  ]) {
+    assert.ok(!run.result.stdout.includes(secret), `stdout leaked ${secret}`);
+    assert.ok(!run.result.stderr.includes(secret), `stderr leaked ${secret}`);
+    assert.ok(!results.includes(secret), `results leaked ${secret}`);
+  }
+});
+
+test("built CLI applies per-operation auth overrides only to matching requests", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specweaver-cli-"));
+  const specPath = join(dir, "overrides.json");
+  writeFileSync(
+    specPath,
+    JSON.stringify({
+      openapi: "3.0.3",
+      info: { title: "overrides", version: "1" },
+      servers: [{ url: "http://127.0.0.1:1" }],
+      components: {
+        securitySchemes: {
+          headerKey: { type: "apiKey", in: "header", name: "X-Api-Key" },
+          queryKey: { type: "apiKey", in: "query", name: "api_key" },
+        },
+      },
+      paths: {
+        "/public": { get: apiOperation() },
+        "/admin": {
+          get: {
+            ...apiOperation(),
+            security: [{ headerKey: [], queryKey: [] }],
+          },
+        },
+      },
+    }),
+  );
+  const run = runSandboxed(
+    dir,
+    `specs:
+  - ${specPath}
+operations: all
+auth:
+  token: global-token
+  headers:
+    X-Global: global-header
+  apiKeys:
+    headerKey: global-header-key
+    queryKey: global-query-key
+authOperations:
+  - method: get
+    path: /admin
+    token: admin-token
+    apiKeys:
+      headerKey: admin-header-key
+      queryKey: admin-query-key
+  - method: POST
+    path: /missing
+    token: unused-token
+`,
+    { keepTemp: true },
+  );
+
+  assert.equal(run.result.status, EXIT_SUCCESS, run.result.stderr);
+  assert.match(
+    run.result.stderr,
+    /warning: auth override for "POST \/missing" does not match any selected operation/,
+  );
+
+  const generated = run.result.stdout.match(/^Generated k6 script: (.+)$/m);
+  assert.ok(generated, `expected a generated-script path:\n${run.result.stdout}`);
+  const data = JSON.parse(
+    readFileSync(join(dirname(generated[1].trim()), "specweaver.data.json"), "utf8"),
+  );
+  const publicOp = data.operations.find((operation) => operation.route === "/public");
+  const adminOp = data.operations.find((operation) => operation.route === "/admin");
+
+  assert.equal(publicOp.headers.Authorization, "Bearer global-token");
+  assert.equal(publicOp.headers["X-Global"], "global-header");
+
+  // Whole-surface replacement: global headers/credentials are not merged into
+  // the overridden operation, and derived auth uses the override's apiKeys.
+  assert.equal(adminOp.headers.Authorization, "Bearer admin-token");
+  assert.equal("X-Global" in adminOp.headers, false);
+  assert.equal(adminOp.headers["X-Api-Key"], "admin-header-key");
+  assert.equal(adminOp.query.api_key, "admin-query-key");
+
+  const results = readFileSync(run.resultsPath, "utf8");
+  for (const secret of [
+    "global-token",
+    "global-header",
+    "global-header-key",
+    "global-query-key",
+    "admin-token",
+    "admin-header-key",
+    "admin-query-key",
+    "unused-token",
   ]) {
     assert.ok(!run.result.stdout.includes(secret), `stdout leaked ${secret}`);
     assert.ok(!run.result.stderr.includes(secret), `stderr leaked ${secret}`);

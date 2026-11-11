@@ -461,12 +461,13 @@ required multipart body is generated in demo), webhooks, `securitySchemes`-deriv
 bearer auth (SPEC-39; the README documents the header/query `apiKey` mappings),
 the remaining coverage warning, and the results JSON. The README also documents
 the shipped `operationId`, `tags`, and path-pattern selector entries; the gallery
-keeps its examples on explicit lists.
+keeps its examples on explicit lists. Per-operation auth overrides
+(`authOperations`) are documented in the [Auth section](../README.md#auth) but
+have no dedicated gallery example.
 
 Deferred and **not** demonstrated or claimed: tolerant/fuzzy method/path
 matching, non-JSON media types outside urlencoded/multipart/XML, `format: binary`
-file uploads (a fixed placeholder is sent), per-operation auth, and remote
-`http(s)` specs.
+file uploads (a fixed placeholder is sent), and remote `http(s)` specs.
 
 See the roadmap for the authoritative limitations:
 

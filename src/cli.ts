@@ -7,6 +7,7 @@ import {
   injectAuth,
   resolveAuthSecrets,
   resolveOperationAuth,
+  unmatchedAuthOperationWarnings,
 } from "./auth.js";
 import { buildCoverageWarnings } from "./coverage.js";
 import {
@@ -91,6 +92,17 @@ function writeWarnings(warnings: readonly string[]): void {
  */
 function writeUnappliedPayloadWarnings(payloads: Config["payloads"]): void {
   writeWarnings(applyPayloadOverrides([], payloads).warnings);
+}
+
+/**
+ * Report SPEC-40 auth overrides on a path where no operation will be selected.
+ * Matching against an empty selection makes every override unmatched, which is
+ * the truth for that run; the exit code is unchanged.
+ */
+function writeUnappliedAuthOperationWarnings(
+  authOperations: Config["authOperations"],
+): void {
+  writeWarnings(unmatchedAuthOperationWarnings([], authOperations));
 }
 
 /**
@@ -278,6 +290,7 @@ async function run(options: CliOptions): Promise<number> {
   // (SPEC-13).
   if (config.specs === undefined) {
     writeUnappliedPayloadWarnings(config.payloads);
+    writeUnappliedAuthOperationWarnings(config.authOperations);
     process.stderr.write(
       [
         "error: `specs` is required to execute operations, but no spec source is configured.",
@@ -293,6 +306,10 @@ async function run(options: CliOptions): Promise<number> {
   );
   // SPEC-23: duplicate operations collapsed by `all` are reported, never lost.
   writeWarnings(duplicateWarnings);
+  // SPEC-40: never silently drop a configured auth override.
+  writeWarnings(
+    unmatchedAuthOperationWarnings(selected, config.authOperations),
+  );
 
   if (selected.length === 0) {
     writeUnappliedPayloadWarnings(config.payloads);
@@ -337,7 +354,12 @@ async function run(options: CliOptions): Promise<number> {
   // SPEC-39 resolves auth per operation (explicit + securitySchemes-derived) so
   // a satisfied requirement never warns and derived auth is never doubled.
   const operationAuth = selected.map((operation) =>
-    resolveOperationAuth(operation, config.auth),
+    resolveOperationAuth(
+      operation,
+      config.auth,
+      process.env,
+      config.authOperations,
+    ),
   );
   writeWarnings(buildCoverageWarnings(selected, operationAuth));
 
@@ -420,7 +442,11 @@ async function run(options: CliOptions): Promise<number> {
       captureResults: true,
       // SPEC-39 AC1: query-string credentials appear in k6's error URLs, so
       // scrub every configured credential from the live stream.
-      redact: resolveAuthSecrets(config.auth),
+      redact: resolveAuthSecrets(
+        config.auth,
+        process.env,
+        config.authOperations,
+      ),
     });
 
     // A results file is produced for both successful and k6-failed runs, as

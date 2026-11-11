@@ -63,7 +63,7 @@ available in v1 and link to the matching limitation in
 | Non-JSON body generation (XML, multipart, form-urlencoded) | Shipped | Generated in the CLI as one wire string with the matched `Content-Type`; fixed multipart boundary, deterministic binary placeholder. Other media types still warn. |
 | Cookie parameters | Shipped | `in: cookie` parameters are generated and sent in one percent-encoded `Cookie` header; array/object values serialize non-exploded (OpenAPI's cookie default is `explode: true`). No cookie jar or `Set-Cookie` handling. |
 | `securitySchemes`-derived auth | Shipped | Bearer schemes use `auth.token`; `apiKey` header/query schemes use `auth.apiKeys[<scheme name>]`. Other scheme types are warn-only. |
-| Per-operation auth | Deferred | Configured and derived auth apply per operation according to its effective `security`; explicit per-operation overrides are not configurable. See [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
+| Per-operation auth overrides | Shipped | `authOperations` entries keyed by `METHOD path` replace the global explicit auth for matched operations; derived schemes then resolve against the override. Unmatched entries warn. |
 | Remote `http(s)` specs | Deferred | See [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
 | OpenAPI 3.1 `webhooks` cataloguing | Shipped | Catalogued as path operations at `/<webhookName>` after `paths`, selectable like any path operation; k6 plays the API server that sends events, and the base URL stands in for the consumer endpoint. |
 
@@ -204,6 +204,10 @@ auth:                       # OPTIONAL: static token/headers/api keys (env-refer
     X-Api-Key: "${API_KEY}"
   apiKeys:                  # securityScheme name -> credential (derived auth)
     ApiKeyAuth: "${API_KEY}"
+authOperations:             # OPTIONAL: per-operation auth overrides
+  - method: POST
+    path: /admin
+    token: "${ADMIN_TOKEN}" # replaces the whole global explicit auth surface
 payloads:                   # OPTIONAL: per-operation whole-body overrides
   - method: POST
     path: /pets
@@ -222,6 +226,7 @@ load:                       # OPTIONAL: default load profile
 | `operations` | **yes** | selector entries \| all | Either a non-empty list of selector entries (`{ method, path }`, `{ operationId }`, `{ tags }`, or `{ path }`) or the exact, case-sensitive literal `all`. See [Operations](#operations-selectors). |
 | `baseUrl` | no | string | Explicit request base URL. Must be a non-empty string (empty, whitespace-only, and non-string values are config errors); otherwise it is trusted verbatim and bypasses the server-URL usability gate. Overrides the fallback `servers[].url`. See [Base URL resolution](#base-url-resolution). |
 | `auth` | no | mapping | Explicit global auth (`token`, `headers`) plus scheme-derived `apiKeys` (securityScheme name → credential). Explicit values apply to **every** selected operation; `apiKeys` values are used only where the operation's effective `security` references that scheme. Values support `${ENV_VAR}`. Absent `auth` means no explicit auth headers and no derived credentials. See [Auth](#auth). |
+| `authOperations` | no | `{ method, path, token?, headers?, apiKeys? }[]` | Per-operation auth overrides keyed by normalized `method` + `path`. A matched entry **replaces** the global explicit `auth` wholesale (no deep merge) and must define at least one of `token`, `headers`, or `apiKeys`; unknown fields and duplicate keys are config errors. Unmatched overrides warn on stderr, including the no-`specs`/zero-selection early paths. Derived `securitySchemes` auth resolves against the override. Values support `${ENV_VAR}`. See [Auth](#auth). |
 | `payloads` | no | `{ method, path, body }[]` | Per-operation JSON body overrides keyed by normalized `method` + `path`. `body` **replaces** the generated body wholesale (no deep merge). Only `method`, `path`, and `body` are accepted; other keys are config errors. Unmatched overrides warn on stderr. |
 | `output` | no | string | Results JSON path (the JSON file only, never the generated k6 script/data). `--out` overrides it. Default: `specweaver-results.json` in the current working directory. |
 | `load` | no | `{ vus, duration }` | Default load profile. Defaults to `vus: 1`, `duration: 30s`. `--vus` / `--duration` override it. |
@@ -379,16 +384,29 @@ may contain credentials.
 
 ### Auth
 
-Auth has two layers. The **explicit global** values (`token`, `headers`) apply to
-every selected operation regardless of its `security`, preserving the original
-contract: `token` emits `Authorization: Bearer <token>` (and wins over an
-`authorization` entry in `headers`, case-insensitively), while `headers` emits
-each configured name/value pair.
+Auth has three layers, in descending precedence:
+
+1. **Per-operation override** — a matching `authOperations` entry.
+2. **Explicit global** — `auth.token` / `auth.headers` / `auth.apiKeys`.
+3. **Scheme-derived** — `securitySchemes` mapped from the effective surface.
+
+The **explicit global** values (`token`, `headers`) apply to every selected
+operation regardless of its `security`, preserving the original contract:
+`token` emits `Authorization: Bearer <token>` (and wins over an `authorization`
+entry in `headers`, case-insensitively), while `headers` emits each configured
+name/value pair.
+
+A matching **per-operation override** replaces that global surface wholesale for
+the operation's requests: the entry's `token`, `headers`, and `apiKeys` replace
+the global counterparts (no deep merge, matching `payloads`). An override that
+defines only `token` therefore does not inherit global `headers` or `apiKeys`.
+Unmatched override entries warn on stderr and never change the exit code.
 
 The **scheme-derived** layer maps the `securitySchemes` an operation's effective
 `security` references onto wire values, so a zero-override run authenticates once
-credentials are configured. `auth.apiKeys` maps a securityScheme name to its
-credential:
+credentials are configured. It resolves against the effective explicit surface
+(override when matched, otherwise global). `auth.apiKeys` maps a securityScheme
+name to its credential:
 
 ```yaml
 auth:
@@ -396,6 +414,12 @@ auth:
   apiKeys:
     HeaderKey: "${HEADER_KEY}"   # apiKey in: header -> header named by the scheme
     QueryKey: "${QUERY_KEY}"     # apiKey in: query  -> query param named by the scheme
+authOperations:
+  - method: POST
+    path: /admin
+    token: "${ADMIN_TOKEN}"      # replaces the global explicit surface here
+    apiKeys:
+      HeaderKey: "${ADMIN_KEY}"  # derived auth resolves against this override
 ```
 
 Supported mappings:
@@ -420,9 +444,10 @@ credential, and one `warning:` per scheme per operation names the scheme:
 supported scheme whose credential is not configured. A warning is never emitted
 for an operation that receives derived auth.
 
-`${ENV_VAR}` references in every `auth` value (including `apiKeys`) are resolved
-from the process environment. An unresolved reference is non-fatal: the
-placeholder is left literal, the run continues, and one `warning:` per unresolved
+`${ENV_VAR}` references in every `auth` and `authOperations` value (including
+`apiKeys`) are resolved from the process environment. An unresolved reference is
+non-fatal: the placeholder is left literal, the run continues, and one
+`warning:` per unresolved
 variable is printed to stderr (deduplicated across fields). Resolved secrets are
 never printed: k6's live stdout/stderr is scrubbed of every configured credential
 before it reaches the console (query-string API keys would otherwise appear in
@@ -621,7 +646,8 @@ vars are in [`e2e/README.md`](e2e/README.md).
    `servers[].url`; exit `2` before k6 when neither works.
 6. **Preflight k6.** Resolve `k6` on `PATH`; a missing binary exits `2`.
 7. **Generate request data.** Build path/query/header/cookie parameters and JSON
-   bodies, apply `payloads` overrides, then inject global auth.
+   bodies, apply `payloads` overrides, then inject the effective auth (a
+   matched `authOperations` override, else the global `auth`).
 8. **Emit the k6 script and companion data** into a unique temporary directory.
    The script uses k6 built-ins and plain JavaScript only.
 9. **Run real k6**, stream its output live, and capture raw NDJSON metrics.
@@ -723,11 +749,11 @@ means **not available**, not partially supported:
   produces a warning; optional unsupported bodies are silent. Multipart sends
   a fixed placeholder for `format: binary` parts, so real file uploads are not
   exercised.
-- **Unsupported security schemes and per-operation overrides are deferred.**
-  Bearer and `apiKey` header/query schemes are derived from the spec (SPEC-39);
+- **Unsupported security schemes are deferred.** Bearer and `apiKey`
+  header/query schemes are derived from the spec (SPEC-39), and per-operation
+  overrides (`authOperations`) replace the global explicit surface (SPEC-40).
   `http` basic/digest, `apiKey` in a cookie, `mutualTLS`, `openIdConnect`, and
-  `oauth2` are warn-only. Configurable per-operation auth overrides remain
-  deferred.
+  `oauth2` are warn-only.
 - **Remote specs are deferred.** `specs` entries are local filesystem paths
   only; `http(s)://` documents are never fetched.
 - **A components-only 3.1 document yields zero operations.** It loads but

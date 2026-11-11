@@ -10,6 +10,7 @@ import {
   resolveAuthHeaders,
   resolveAuthSecrets,
   resolveOperationAuth,
+  unmatchedAuthOperationWarnings,
   withAuthHeaders,
   withResolvedAuth,
 } from "../dist/auth.js";
@@ -565,6 +566,159 @@ test("injectAuth applies both derived headers and query parameters in request or
   assert.deepEqual(warnings, []);
   assert.equal(requests[0].headers["X-Api-Key"], "h");
   assert.equal(requests[0].query.api_key, "q");
+});
+
+// --- Per-operation auth overrides (SPEC-40) --------------------------------
+
+test("an authOperations entry replaces the whole global explicit surface", () => {
+  const secured = operation({
+    method: "POST",
+    path: "/admin",
+    security: [{ queryKey: [] }],
+    securitySchemes: QUERY_KEY_SCHEMES,
+  });
+
+  const resolved = resolveOperationAuth(
+    secured,
+    {
+      token: "global-token",
+      headers: { "X-Global": "global-header" },
+      apiKeys: { queryKey: "global-query" },
+    },
+    {},
+    [
+      {
+        method: "post",
+        path: "/admin",
+        token: "override-token",
+        apiKeys: { queryKey: "override-query" },
+      },
+    ],
+  );
+
+  // Whole-surface replacement: the global header is not merged in, and the
+  // override's query credential is then used by the derived mapping.
+  assert.deepEqual(resolved.headers, {
+    Authorization: "Bearer override-token",
+  });
+  assert.deepEqual(resolved.query, { api_key: "override-query" });
+  assert.deepEqual(resolved.warnings, []);
+});
+
+test("derived auth resolves against the per-operation surface, not the global one", () => {
+  const secured = operation({
+    method: "GET",
+    path: "/secure",
+    security: [{ headerKey: [] }],
+    securitySchemes: HEADER_KEY_SCHEMES,
+  });
+
+  const noOverride = resolveOperationAuth(
+    secured,
+    { apiKeys: { headerKey: "global-key" } },
+    {},
+  );
+  assert.equal(noOverride.headers["X-Api-Key"], "global-key");
+
+  const overridden = resolveOperationAuth(
+    secured,
+    { apiKeys: { headerKey: "global-key" } },
+    {},
+    [{ method: "GET", path: "/secure", token: "override-token" }],
+  );
+  // The override does not carry apiKeys, so the global credential must not leak
+  // into the derived mapping.
+  assert.deepEqual(overridden.headers, {
+    Authorization: "Bearer override-token",
+  });
+  assert.equal(overridden.warnings.length, 1);
+  assert.match(
+    overridden.warnings[0],
+    /no authOperations\[0\]\.apiKeys\.headerKey credential/,
+  );
+});
+
+test("an override without a bearer token warns against the override's field path", () => {
+  const secured = operation({
+    method: "GET",
+    path: "/secure",
+    security: [{ bearerAuth: [] }],
+    securitySchemes: BEARER_SCHEMES,
+  });
+
+  const resolved = resolveOperationAuth(
+    secured,
+    { token: "global-token" },
+    {},
+    [{ method: "GET", path: "/secure", headers: { "X-Admin": "1" } }],
+  );
+
+  // The global token is replaced, not inherited, so the derived bearer scheme
+  // is unsatisfied and the warning must name the override's field, not `auth`.
+  assert.deepEqual(resolved.headers, { "X-Admin": "1" });
+  assert.equal(resolved.warnings.length, 1);
+  assert.match(
+    resolved.warnings[0],
+    /no authOperations\[0\]\.token is configured/,
+  );
+});
+
+test("injectAuth applies an override only to the matching operation", () => {
+  const operations = [
+    operation({ method: "GET", path: "/public" }),
+    operation({ method: "GET", path: "/admin" }),
+  ];
+  const requests = [
+    request({ method: "GET", path: "/public" }),
+    request({ method: "GET", path: "/admin" }),
+  ];
+
+  const { requests: injected, warnings } = injectAuth(
+    {
+      auth: { token: "global-token" },
+      authOperations: [{ method: "get", path: "/admin", token: "admin-token" }],
+    },
+    requests,
+    { operations, env: {} },
+  );
+
+  assert.deepEqual(warnings, []);
+  assert.equal(injected[0].headers.Authorization, "Bearer global-token");
+  assert.equal(injected[1].headers.Authorization, "Bearer admin-token");
+});
+
+test("unmatched authOperations produce deterministic warnings", () => {
+  assert.deepEqual(
+    unmatchedAuthOperationWarnings(
+      [operation({ method: "GET", path: "/public" })],
+      [
+        { method: "POST", path: "/missing", token: "a" },
+        { method: "GET", path: "/public", token: "b" },
+      ],
+    ),
+    [
+      'auth override for "POST /missing" does not match any selected operation; ignoring.',
+    ],
+  );
+  assert.deepEqual(unmatchedAuthOperationWarnings([], undefined), []);
+});
+
+test("resolveAuthSecrets includes per-operation override credentials", () => {
+  assert.deepEqual(
+    resolveAuthSecrets(
+      { token: "global-token" },
+      {},
+      [
+        {
+          method: "GET",
+          path: "/admin",
+          headers: { "X-Admin": "admin-header" },
+          apiKeys: { AdminKey: "admin-key" },
+        },
+      ],
+    ).sort(),
+    ["admin-header", "admin-key", "global-token"],
+  );
 });
 
 // --- Stream redaction (SPEC-39 AC1) ---------------------------------------

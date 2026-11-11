@@ -39,6 +39,10 @@
  *     X-Api-Key: "${API_KEY}"
  *   apiKeys:                  # scheme name -> credential (SPEC-39)
  *     ApiKeyAuth: "${API_KEY}"
+ * authOperations:             # OPTIONAL, per-operation auth overrides (SPEC-40)
+ *   - method: POST
+ *     path: /admin
+ *     token: "${ADMIN_TOKEN}" # replaces the whole global explicit auth surface
  * payloads:                   # OPTIONAL, per-operation JSON body overrides
  *   - method: POST
  *     path: /pets
@@ -132,6 +136,23 @@ export interface AuthConfig {
 }
 
 /**
+ * Per-operation auth override, keyed by `method` + `path` (SPEC-40).
+ *
+ * A matched entry **fully replaces** the global explicit {@link AuthConfig} for
+ * that operation's requests: `token`, `headers`, and `apiKeys` replace the
+ * global counterparts as a whole surface (no deep merge, matching `payloads`).
+ * SPEC-39's `securitySchemes`-derived mappings then resolve against this
+ * per-operation surface. The method is normalized to uppercase so matching is
+ * case-insensitive, exactly like operation selection and `payloads`.
+ */
+export interface AuthOperationOverride extends AuthConfig {
+  /** Upper-cased HTTP method, e.g. `POST`. */
+  method: string;
+  /** OpenAPI path template, e.g. `/admin`. */
+  path: string;
+}
+
+/**
  * Per-operation payload override, keyed by `method` + `path`.
  *
  * `body` is the complete replacement for the generated JSON request body of the
@@ -177,6 +198,13 @@ export interface Config {
   baseUrl?: string;
   /** Static auth, with `${ENV_VAR}` references already resolved. */
   auth?: AuthConfig;
+  /**
+   * Per-operation auth overrides (SPEC-40), applied by normalized `method` +
+   * `path`. A matching entry replaces the global explicit `auth` for that
+   * operation's requests and is then combined with `securitySchemes`-derived
+   * credentials. Unmatched entries warn without failing the run.
+   */
+  authOperations?: AuthOperationOverride[];
   /**
    * Per-operation JSON body overrides, applied before auth injection. Each
    * entry replaces (never deep-merges) the generated body of the operation whose
@@ -244,12 +272,24 @@ const ROOT_KEYS = new Set([
   "operations",
   "baseUrl",
   "auth",
+  "authOperations",
   "payloads",
   "output",
   "load",
 ]);
 const LOAD_KEYS = new Set(["vus", "duration"]);
 const AUTH_KEYS = new Set(["token", "headers", "apiKeys"]);
+/**
+ * Fields accepted in an `authOperations` entry: the `payloads`-style
+ * `method`/`path` key plus the global auth surface (SPEC-40).
+ */
+const AUTH_OPERATION_KEYS = new Set([
+  "method",
+  "path",
+  "token",
+  "headers",
+  "apiKeys",
+]);
 /** Fields accepted in an `operations` entry (one selector form per entry). */
 const OPERATION_SELECTOR_KEYS = new Set(["method", "path", "operationId", "tags"]);
 /**
@@ -517,6 +557,79 @@ function validateLoad(value: unknown, errors: string[]): PartialLoad {
   return load;
 }
 
+/**
+ * Validate one auth surface (`auth` or an `authOperations[i]` entry).
+ *
+ * `at` labels the field path in aggregated errors and interpolation warnings,
+ * so both surfaces share identical shape checks and messages (`auth.token` vs
+ * `authOperations[0].token`).
+ */
+function validateAuthFields(
+  value: Record<string, unknown>,
+  at: string,
+  errors: string[],
+  warnings: string[],
+): AuthConfig {
+  const auth: AuthConfig = {};
+
+  if ("token" in value && value.token !== undefined) {
+    if (typeof value.token !== "string") {
+      errors.push(`\`${at}.token\` must be a string`);
+    } else {
+      auth.token = interpolate(value.token, `${at}.token`, warnings);
+    }
+  }
+
+  if ("headers" in value && value.headers !== undefined) {
+    const headers = value.headers;
+    if (!isPlainObject(headers)) {
+      errors.push(`\`${at}.headers\` must be a mapping of header names to string values`);
+    } else {
+      const resolved: Record<string, string> = {};
+      for (const [name, headerValue] of Object.entries(headers)) {
+        if (typeof headerValue !== "string") {
+          errors.push(`\`${at}.headers.${name}\` must be a string`);
+        } else {
+          resolved[name] = interpolate(
+            headerValue,
+            `${at}.headers.${name}`,
+            warnings,
+          );
+        }
+      }
+      auth.headers = resolved;
+    }
+  }
+
+  if ("apiKeys" in value && value.apiKeys !== undefined) {
+    const apiKeys = value.apiKeys;
+    if (!isPlainObject(apiKeys)) {
+      errors.push(
+        `\`${at}.apiKeys\` must be a mapping of securityScheme names to string values`,
+      );
+    } else {
+      const resolved: Record<string, string> = {};
+      for (const [name, credential] of Object.entries(apiKeys)) {
+        if (name.trim() === "") {
+          errors.push(`\`${at}.apiKeys\` securityScheme names must be non-empty`);
+        } else if (typeof credential !== "string") {
+          // Never render the credential: it may be a secret.
+          errors.push(`\`${at}.apiKeys.${name}\` must be a string`);
+        } else {
+          resolved[name] = interpolate(
+            credential,
+            `${at}.apiKeys.${name}`,
+            warnings,
+          );
+        }
+      }
+      auth.apiKeys = resolved;
+    }
+  }
+
+  return auth;
+}
+
 function validateAuth(
   value: unknown,
   errors: string[],
@@ -536,60 +649,92 @@ function validateAuth(
     }
   }
 
-  const auth: AuthConfig = {};
+  return validateAuthFields(value, "auth", errors, warnings);
+}
 
-  if ("token" in value && value.token !== undefined) {
-    if (typeof value.token !== "string") {
-      errors.push("`auth.token` must be a string");
-    } else {
-      auth.token = interpolate(value.token, "auth.token", warnings);
-    }
+function validateAuthOperations(
+  value: unknown,
+  errors: string[],
+  warnings: string[],
+): AuthOperationOverride[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    errors.push("`authOperations` must be a list of per-operation auth overrides");
+    return undefined;
   }
 
-  if ("headers" in value && value.headers !== undefined) {
-    const headers = value.headers;
-    if (!isPlainObject(headers)) {
-      errors.push("`auth.headers` must be a mapping of header names to string values");
-    } else {
-      const resolved: Record<string, string> = {};
-      for (const [name, headerValue] of Object.entries(headers)) {
-        if (typeof headerValue !== "string") {
-          errors.push(`\`auth.headers.${name}\` must be a string`);
-        } else {
-          resolved[name] = interpolate(headerValue, `auth.headers.${name}`, warnings);
-        }
-      }
-      auth.headers = resolved;
-    }
-  }
+  const overrides: AuthOperationOverride[] = [];
+  const seen = new Set<string>();
 
-  if ("apiKeys" in value && value.apiKeys !== undefined) {
-    const apiKeys = value.apiKeys;
-    if (!isPlainObject(apiKeys)) {
+  value.forEach((entry, index) => {
+    const at = `authOperations[${index}]`;
+    if (!isPlainObject(entry)) {
       errors.push(
-        "`auth.apiKeys` must be a mapping of securityScheme names to string values",
+        `\`${at}\` must be a mapping with \`method\`, \`path\`, and at least one of \`token\`, \`headers\`, or \`apiKeys\``,
       );
-    } else {
-      const resolved: Record<string, string> = {};
-      for (const [name, credential] of Object.entries(apiKeys)) {
-        if (name.trim() === "") {
-          errors.push("`auth.apiKeys` securityScheme names must be non-empty");
-        } else if (typeof credential !== "string") {
-          // Never render the credential: it may be a secret.
-          errors.push(`\`auth.apiKeys.${name}\` must be a string`);
-        } else {
-          resolved[name] = interpolate(
-            credential,
-            `auth.apiKeys.${name}`,
-            warnings,
-          );
-        }
-      }
-      auth.apiKeys = resolved;
+      return;
     }
-  }
 
-  return auth;
+    for (const key of Object.keys(entry)) {
+      if (!AUTH_OPERATION_KEYS.has(key)) {
+        errors.push(
+          `unknown field \`${at}.${key}\`; auth overrides support only \`method\`, \`path\`, \`token\`, \`headers\`, and \`apiKeys\``,
+        );
+      }
+    }
+
+    const hasAnyAuth =
+      "token" in entry || "headers" in entry || "apiKeys" in entry;
+    if (!hasAnyAuth) {
+      errors.push(
+        `\`${at}\` must define at least one of \`token\`, \`headers\`, or \`apiKeys\``,
+      );
+    }
+
+    const rawMethod = entry.method;
+    const rawPath = entry.path;
+    let valid = true;
+    let method = "";
+    let path = "";
+    if (typeof rawMethod !== "string" || rawMethod.trim() === "") {
+      errors.push(`\`${at}.method\` must be a non-empty string`);
+      valid = false;
+    } else if (!HTTP_METHOD_SET.has(rawMethod.toUpperCase())) {
+      errors.push(
+        `\`${at}.method\` must be one of ${HTTP_METHODS.join(", ")} (received "${rawMethod}")`,
+      );
+      valid = false;
+    } else {
+      method = rawMethod.toUpperCase();
+    }
+    if (typeof rawPath !== "string" || rawPath.trim() === "") {
+      errors.push(`\`${at}.path\` must be a non-empty string`);
+      valid = false;
+    } else {
+      path = rawPath;
+    }
+
+    // Shape-check the auth surface even when the key is invalid, so one entry
+    // can report several independent problems (aggregated like every other
+    // schema violation). Never render a credential value.
+    const auth = validateAuthFields(entry, at, errors, warnings);
+
+    if (!valid) {
+      return;
+    }
+
+    const id = `${method} ${path}`;
+    if (seen.has(id)) {
+      errors.push(`duplicate auth operation override \`${id}\``);
+      return;
+    }
+    seen.add(id);
+    overrides.push({ method, path, ...auth });
+  });
+
+  return overrides;
 }
 
 function validatePayloads(value: unknown, errors: string[]): PayloadOverride[] | undefined {
@@ -730,6 +875,11 @@ export function parseConfig(
   const baseUrl = validateBaseUrl(document.baseUrl, errors);
   const rawLoad = validateLoad(document.load, errors);
   const auth = validateAuth(document.auth, errors, warnings);
+  const authOperations = validateAuthOperations(
+    document.authOperations,
+    errors,
+    warnings,
+  );
   const payloads = validatePayloads(document.payloads, errors);
   const output = validateOutput(document.output, errors);
 
@@ -753,6 +903,9 @@ export function parseConfig(
   }
   if (auth !== undefined) {
     config.auth = auth;
+  }
+  if (authOperations !== undefined) {
+    config.authOperations = authOperations;
   }
   if (payloads !== undefined) {
     config.payloads = payloads;

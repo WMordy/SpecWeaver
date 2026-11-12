@@ -5,9 +5,15 @@ priorities change; the Kanban board remains the source of truth for ticket statu
 
 - **Project:** SpecWeaver (`SPEC`) — `01M57WNZ2HM1QNBMD684YFXK7D`
 - **Audit of record:** SPEC-12 (closed) — `01M5CJ3JWM0S79R1GNVEEVJ5GX`
-- **Snapshot:** 2026-10-24
+- **Snapshot:** 2026-11-13
 
 ## Where we are
+
+P5 (public-release readiness) is complete: SPEC-42…51 are `done`, and the
+v1.0.0 tree is prepared (version bump, CHANGELOG, and the P5 closeout below).
+It has **not** been published to npm, tagged, or released; the recorded
+go/no-go decision is in the P5 section. The paragraphs that follow describe
+earlier snapshots and are kept as recorded.
 
 SPEC-1 through SPEC-36 are `done`; P3 (adoption and live end-to-end proof) is
 complete and committed. The P2 zero-override milestone remains complete.
@@ -117,8 +123,9 @@ appear in the change log at their own commits. None were re-run by SPEC-42
 (`6 files / 132 links, 0 errors`) is recorded with the readiness audit. CI run
 IDs and the no-DNS/IP SSRF posture sign-off remain a human step.
 
-P5 (public-release readiness, SPEC-42…50) is active; see the board for ticket
-status. No public release has been tagged.
+P5 (public-release readiness, SPEC-42…51) is complete; see the P5 section
+below. The v1.0.0 tree is prepared but has not been published, tagged, or
+released.
 
 ## Work order (do not reorder without updating this file)
 
@@ -543,6 +550,98 @@ dependency-free, warnings remain non-fatal, secrets are never logged, and the
 roadmap is updated at phase close; per-ticket updates are limited to status and
 marking limitations fixed.
 
+### P5 — public-release readiness (SPEC-42…51, complete)
+
+P5 prepared a public v1.0.0 without adding product features: it audited every
+advertised claim, ran the documentation as a stranger, fixed the gaps it found,
+hardened the package for publication, and prepared the version metadata.
+
+| Order | Key | Ticket ID | Priority | Status | Title |
+|---|---|---|---|---|---|
+| 1 | SPEC-42 | `01M786RJ80JE9FA6E85CY30NED` | high | done | Audit advertised claims against shipped behavior |
+| 2 | SPEC-43 | `01M786RJ8CQESV0B2FH9RB3H5J` | high | done | Run the clean-clone stranger walkthrough |
+| 3 | SPEC-44 | `01M786RJ8TZP0HD48W5BAKFWM0` | high | done | Fix documentation drift found by the audit |
+| 4 | SPEC-45 | `01M786RJ95F660CG13M2W6PN7E` | high | done | Fix onboarding friction and re-check failed steps |
+| 5 | SPEC-46 | `01M786RJ9CY5W7PBDEM0VNGWMP` | medium | done | Add public-release repo hygiene: LICENSE, npm metadata, pack check |
+| 6 | SPEC-47 | `01M786RJ9JZ9VJSCKP0K9JVETP` | medium | done | Cut v1.0.0 with CHANGELOG and P5 closeout |
+| 7 | SPEC-48 | `01M788XWSV1PVK75EZFV2ET12H` | high | done | Upgrade `@faker-js/faker` for advisory GHSA-qxc2-j82w-r537 |
+| 8 | SPEC-49 | `01M78AA8WQFVMEB6CHNHJMWDE7` | high | done | Support expected statuses for webhook operations in generated checks |
+| 9 | SPEC-50 | `01M78AJ69ZW65WM01DP78CBXTB` | medium | done | Include webhooks in the zero-selection diagnostic |
+| 10 | SPEC-51 | `01M78YRRB2JA678MPP3Q5BTP05` | high | done | Align documented Node/npm floor with `@faker-js/faker` 10 engines |
+
+Resolved decisions:
+
+- SPEC-42/43/44/45 (done) audited every README/AGENTS/examples/samples/ROADMAP
+  claim against shipped behavior, ran the quick start on a pristine clone, and
+  fixed the drift and onboarding friction they found. The full claim→evidence
+  record, walkthrough log, and re-check checklist live in
+  [docs/readiness.md](docs/readiness.md); no runtime behavior changed.
+- SPEC-46 (done) added the MIT `LICENSE` already declared by `package.json`,
+  linked it from the README, and filled in the npm `repository`, `homepage`,
+  `bugs`, and `author` metadata. `npm pack --dry-run --json` ships exactly
+  `LICENSE`, `README.md`, `package.json`, and `dist/**`; the `files` allowlist
+  keeps sources, tests, docs, examples, samples, configs, and the default
+  results file out of the tarball.
+- SPEC-47 (done with this closeout) set version `1.0.0` in `package.json` and
+  both lockfile fields, added [CHANGELOG.md](CHANGELOG.md) covering
+  SPEC-1…51, updated the README results example, and recorded the go/no-go
+  decision below. No runtime behavior changed.
+- SPEC-48 (done) moved `@faker-js/faker` to `^10.6.0` (lockfile `10.6.0`),
+  clearing `GHSA-qxc2-j82w-r537`; `npm audit --audit-level=high` is clean. No
+  source call sites changed. Seeded values shift for some generators across the
+  major, but output stays deterministic and payload types, formats, and bounds
+  are unchanged (seeded values are not contractual). Record:
+  [docs/readiness.md](docs/readiness.md#spec-48-resolution-append-only).
+- SPEC-49 (done) resolves a webhook operation's declared 2xx responses through
+  the same route mapping cataloguing uses (`/<webhookName>`), with `paths`
+  winning when both containers match and webhooks matched in document order.
+  Unit tests cover webhooks-only, leading-slash names, `2XX` wildcards,
+  precedence, the no-2xx fallback, and 3.0 documents; a webhook-only 201 spec
+  passes real k6 under `--fail-on-check-failure`.
+- SPEC-50 (done) makes the `operations: all` zero-selection hint name both
+  `paths` and OpenAPI 3.1 `webhooks`; exit `2`, warnings, and the
+  no-results-file behavior are unchanged.
+- SPEC-51 (done) mirrors faker 10's engines: `engines.node`
+  `^20.19.0 || ^22.13.0 || ^23.5.0 || >=24.0.0` and `engines.npm >=10`, with
+  the same formula in the README, AGENTS, examples, and e2e docs, and a Node
+  `20.19.0` + `22` CI matrix. Verified warning-free on the floor (Node
+  `v20.19.0`, npm `10.8.2`). Record:
+  [docs/readiness.md](docs/readiness.md#spec-51-resolution-append-only).
+
+P5 limitations and pending items:
+
+- **v1.0.0 is prepared only.** No `npm publish`, `git tag v1.0.0`, or GitHub
+  release has been performed; see the go/no-go record.
+- The examples gallery still has no webhook example. SPEC-45 reverted its
+  attempt because checks failed; SPEC-49 fixed that cause, but adding the
+  example remains a follow-up, not part of this cut.
+- Branch protection must name the new matrix checks `Build and test (Node
+  20.19.0)` and `Build and test (Node 22)`; a stale `Build and test` entry
+  would block pull requests.
+- The first matrix CI run on `6aa0944`/`7045c5f` had not been observed from the
+  local environment at closeout.
+- The deferred list is unchanged: non-JSON bodies outside the three supported
+  media types, security schemes other than bearer and header/query `apiKey`,
+  selector include/exclude composition and tolerant matching, cookie jars and
+  `Set-Cookie` handling, fetching/validating the real webhook consumer, and
+  DNS/IP-level SSRF filtering for remote specs. See the README limitations.
+
+#### P5 go/no-go record (2026-11-13)
+
+- **Approver:** WMORDY (project owner).
+- **Decision:** approved preparing the v1.0.0 release tree (version bump,
+  CHANGELOG, README results example, and this P5 closeout). Publishing is
+  explicitly **not** approved.
+- **Date:** 2026-11-13.
+- **Scope:** version metadata and documentation only; no runtime behavior,
+  dependency, or test change.
+- **Not performed:** `npm publish`, `git tag v1.0.0`, and any GitHub release.
+  These remain human actions.
+- **Outstanding human checks:** required status checks must name
+  `Build and test (Node 20.19.0)` and `Build and test (Node 22)`; the first
+  matrix CI run on `6aa0944`/`7045c5f` had not been observed; repository
+  visibility and publication settings remain manual.
+
 ## Explicit non-goals for this roadmap
 
 Scheduling/continuous runs, baseline/regression comparison, SLA thresholds,
@@ -732,3 +831,33 @@ unless the product owner reopens them. Do not create tickets for them here.
   `npm test` 408/408 on Node 22 and 408/408 on Node 18.20.8; a local HTTPS
   fetch and HTTPS→HTTP downgrade check passed. CI and the no-DNS/IP SSRF
   posture sign-off remain for a human.
+- 2026-11-13: P5 delivered (SPEC-42…45, committed as `3dbe2eb`): the
+  advertised-claims audit, clean-clone walkthrough, documentation-drift fixes,
+  and onboarding fixes are recorded in `docs/readiness.md`; docs/examples only,
+  no runtime change. `npm test` 408/408 at that point.
+- 2026-11-13: SPEC-46 done (committed as `a9b48c5`): MIT `LICENSE`, npm
+  `repository`/`homepage`/`bugs`/`author` metadata, README license link, and a
+  `npm pack` check shipping only `LICENSE`, `README.md`, `package.json`, and
+  `dist/**` (`npm test` 408/408).
+- 2026-11-13: SPEC-48 done (committed as `78b5790`): `@faker-js/faker`
+  `^10.6.0` clears `GHSA-qxc2-j82w-r537`; `npm audit --audit-level=high` clean,
+  408/408 on Node 22 and 18.20.8 at that point, live e2e green; seeded-output
+  and engine-floor caveats recorded in `docs/readiness.md`.
+- 2026-11-13: SPEC-49 done (committed as `369686c`): webhook operations use
+  their declared 2xx status in generated checks, `paths` takes precedence on a
+  shared route, and 3.1-only webhook matching stays in document order; six new
+  emitter tests, 414/414, live e2e green, webhook-only 201 probe passes under
+  `--fail-on-check-failure`.
+- 2026-11-13: SPEC-50 done (committed as `7045c5f`): the `operations: all`
+  zero-selection hint names `paths` and 3.1 `webhooks`; exit code, warnings, and
+  no-results-file behavior unchanged; 414/414 and live e2e green.
+- 2026-11-13: SPEC-51 done (committed as `6aa0944`): `engines.node`
+  `^20.19.0 || ^22.13.0 || ^23.5.0 || >=24.0.0` and `engines.npm >=10` mirror
+  faker 10 across package metadata, README, AGENTS, examples, and e2e docs; CI
+  is a Node `20.19.0` + `22` matrix; `npm ci` warning-free and 414/414 on the
+  floor.
+- 2026-11-13: SPEC-47 v1.0.0 prepared: version `1.0.0` in `package.json` and
+  both lockfile fields, new `CHANGELOG.md` covering SPEC-1…51, README results
+  example updated, and this P5 closeout with the recorded go/no-go. Build,
+  414/414 tests, live e2e, `npm audit --audit-level=high`, and the link/anchor
+  validator (6 files, 138 links) pass. Not published, tagged, or released.

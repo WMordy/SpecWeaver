@@ -555,7 +555,7 @@ The results JSON schema:
 ```jsonc
 {
   "tool": "specweaver",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "timestamp": "2026-10-18T17:00:00.000Z", // ISO-8601, when results were produced
   "config": { "vus": 2, "duration": "5s" }, // resolved load profile
   "k6ExitCode": 0,                          // k6's raw exit code (null on signal)
@@ -902,7 +902,8 @@ report the message if it persists.
 
 Prerequisites: Node.js 20.19+/22.13+/23.5+/24+ and npm >= 10 (matching
 `@faker-js/faker` 10; verified on 20.19.0 and 22.x; CI uses both), `npm ci`,
-and real k6 on `PATH` for the suites that use it.
+and real k6 on `PATH` for the suites that use it. Release history lives in
+`CHANGELOG.md` in the repository (it is not part of the npm tarball).
 
 ```sh
 npm ci            # install from package-lock.json

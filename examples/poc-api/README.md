@@ -16,7 +16,7 @@ All commands below are meant to be run **from the repository root**
 
 | File | Purpose |
 |---|---|
-| `server.js` | Node 22 built-in `http` server, in-memory seed data, request logging, graceful shutdown. |
+| `server.js` | Node built-in `http` server, in-memory seed data, request logging, graceful shutdown. |
 | `openapi.yaml` | OpenAPI 3.0.3 document for all nine operations, including the v1 coverage-gap surfaces and an optional cookie parameter. |
 | `specweaver.config.yaml` | Canonical happy-path run: explicit operations, static `POC-TOKEN`, `POST /pets` payload override, no `baseUrl`. |
 | `specweaver.warnings.config.yaml` | `operations: all` with no auth to demonstrate the remaining coverage warnings. |
@@ -128,7 +128,7 @@ The POC server itself needs no install. The SpecWeaver CLI needs the repository
 dependencies and a built `dist/`, plus real `k6` on `PATH`:
 
 ```sh
-npm install        # once, for the repository (not for the POC)
+npm ci             # once, for the repository (not for the POC)
 npm run build      # produces dist/cli.js
 k6 version         # confirm real k6 is available
 node examples/poc-api/server.js

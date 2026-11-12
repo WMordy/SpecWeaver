@@ -99,12 +99,26 @@ exits `0` (`tsc`); `npm test` passes **298/298** tests with **0 failed and
 0 skipped**, including the k6 e2e; `npm run test:live-e2e` passes **1/1** with
 real `k6 v2.3.0` (no PATH stub) in about 7s including the build; and CI run
 `40045212473` is **green** on `1aee7ca`, with the "Run live k6 end-to-end test"
-step completed successfully (not skipped). The documented link/anchor validator
-checked 6 Markdown files and 123 links/anchors with no errors. All gallery
+step completed successfully (not skipped). The link/anchor validator documented
+in [Validating README links](README.md#validating-readme-links) checked
+6 Markdown files and 123 links/anchors with no errors at this commit. All gallery
 examples were run against the POC API and matched their documented exit codes,
 operation sets, warnings, and results. The live e2e is a functional smoke test,
 not a performance benchmark, and the POC API is example/test infrastructure, not
 a supported service (see the P3 limitations below).
+
+**Historical verification records (`M9`–`M12`, `M15`).** The counts in the
+paragraph above — 298/298 tests, 6 Markdown files/123 links, real `k6 v2.3.0` —
+are records of the P3 close at `1aee7ca`. The Node 18.20.8 408/408 result is a
+separate record at `8221d08` (SPEC-41), and the earlier close counts (224…358)
+appear in the change log at their own commits. None were re-run by SPEC-42
+(readiness audit) or SPEC-44 (documentation drift); the current tree verifies
+408 tests with real `k6 v2.4.0`, and the SPEC-44 validator run
+(`6 files / 132 links, 0 errors`) is recorded with the readiness audit. CI run
+IDs and the no-DNS/IP SSRF posture sign-off remain a human step.
+
+P5 (public-release readiness, SPEC-42…50) is active; see the board for ticket
+status. No public release has been tagged.
 
 ## Work order (do not reorder without updating this file)
 
@@ -383,10 +397,10 @@ Claim → evidence → result:
 #### P3 limitations / non-goals
 
 - No new product features at P3 time. Selectors beyond `all`, per-operation
-  auth, and remote specs remain deferred and are documented as such in the
-  README and examples gallery. Cookies were also deferred at P3 time and
-  shipped later in SPEC-35; non-JSON bodies shipped later in SPEC-38; supported
-  `securitySchemes`-derived auth shipped later in SPEC-39.
+  auth, and remote specs were deferred at P3 close and shipped later in
+  SPEC-36, SPEC-40, and SPEC-41 respectively. Cookies were also deferred at P3
+  time and shipped later in SPEC-35; non-JSON bodies shipped later in SPEC-38;
+  supported `securitySchemes`-derived auth shipped later in SPEC-39.
 - The live e2e is a functional smoke test against a local, in-memory POC API;
   it is not a performance, capacity, or SLA test, and it does not call public
   internet APIs.
@@ -488,9 +502,10 @@ Decisions and resolved behavior:
   catalogue the `webhooks` member. Webhook `$ref` resolution beyond the
   existing local `$ref` support and fetching/validating the real consumer are
   out of scope.
-- SPEC-38 (in progress) generates the three named non-JSON bodies **in the CLI**
-  (faker never runs in k6; the emitted script stays dependency-free and each
-  body is delivered as a single raw string plus its matched `Content-Type`):
+- SPEC-38 (done, committed as `b87623a`) generates the three named non-JSON
+  bodies **in the CLI** (faker never runs in k6; the emitted script stays
+  dependency-free and each body is delivered as a single raw string plus its
+  matched `Content-Type`):
   - `application/x-www-form-urlencoded` — object schema → `key=value` pairs
     joined by `&`, names/values percent-encoded, schema property order, arrays
     as repeated keys, nested objects as their JSON text.
@@ -670,6 +685,8 @@ unless the product owner reopens them. Do not create tickets for them here.
   fixed and the P4 decision recorded. `npm run build` clean; `npm test`
   350/350 passing (catalog, selection, warning, and CLI run tests). P4 remains
   open; the other four tickets are untouched.
+- 2026-11-03: SPEC-38 approved and done (committed as `b87623a`); the P4
+  delivery decision above marks the non-JSON body generation done.
 - 2026-11-05: SPEC-39 implemented, reviewed, and committed: `auth.apiKeys` maps a
   securityScheme name to an interpolated credential; selected operations whose
   effective `security` references a supported scheme get derived wire auth

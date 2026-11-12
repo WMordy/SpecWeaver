@@ -40,14 +40,16 @@ OpenAPI to k6.
 
 ## Features at a glance
 
-**Shipped** capabilities are implemented and demonstrated in
-[`examples/`](examples/README.md). **Deferred** capabilities are explicitly not
-available in v1 and link to the matching limitation in
+**Shipped** capabilities are implemented. The gallery at
+[`examples/`](examples/README.md) demonstrates most of them; its
+[shipped-vs-deferred list](examples/README.md#shipped-vs-deferred) names the
+shipped ones that are documented but not demonstrated. **Deferred** capabilities
+are explicitly not available in v1 and link to the matching limitation in
 [`ROADMAP.md`](ROADMAP.md).
 
 | Capability | Status | Notes |
 | --- | --- | --- |
-| OpenAPI 3.0/3.1 specs (JSON or YAML), local or remote | Shipped | Local paths and absolute `http(s)://` URLs; local and remote `$ref`s resolved (see [Remote specs](#remote-specs-network-and-error-policy)). |
+| OpenAPI 3.0/3.1 specs (JSON or YAML), local or remote | Shipped | Local paths and absolute `http(s)://` URLs. `$ref`s inside a remote document resolve against that document's URL; a local document's `$ref`s keep local-only behavior (see [Remote specs](#remote-specs-network-and-error-policy)). |
 | Selector entries: `{ method, path }`, `{ operationId }`, `{ tags }`, `{ path }` patterns | Shipped | Additive forms; deterministic union expansion with `METHOD path` dedupe. |
 | Whole-catalog selector `operations: all` | Shipped | Exact, case-sensitive literal; deterministic expansion. |
 | Derived request data | Shipped | Path/query/header/cookie parameters and JSON bodies; path parameters honor `simple`, `label`, and `matrix` styles with `explode`; explicit example/examples → `default` → faker; required and optional fields generated. |
@@ -88,9 +90,9 @@ available in v1 and link to the matching limitation in
 
 ## Quick start (2 minutes)
 
-Prerequisites: Node.js >= 18 (the examples are verified on Node 22), real `k6`
-v2.x on `PATH`, and this repository checked out. All commands run from the
-repository root.
+Prerequisites: Node.js >= 18 (verified on 18.20.8 and 22.x; CI uses Node 22),
+real `k6` v2.x on `PATH`, and this repository checked out. All commands run from
+the repository root.
 
 In the first terminal, install, build, and start the checked-in POC API:
 
@@ -147,8 +149,9 @@ map. The checked-in [`samples/`](samples/) remain the canonical minimal configs.
 
 ## Install and requirements
 
-- **Node.js >= 18** (`package.json` `engines`; CI uses Node 22).
-- **Real `k6` v2.x on `PATH`** (verified with `k6 v2.3.0`). SpecWeaver never
+- **Node.js >= 18** (`package.json` `engines`; verified on 18.20.8 and 22.x; CI
+  uses Node 22).
+- **Real `k6` v2.x on `PATH`** (verified with `k6 v2.4.0`). SpecWeaver never
   installs k6. If it is missing, SpecWeaver exits `2` before running anything
   with an actionable message. Install it from
   <https://grafana.com/docs/k6/latest/set-up/install-k6/> and verify with:
@@ -168,6 +171,10 @@ specweaver --version
 
 This checkout is the supported installation source. `npm i -g specweaver`
 would only work if the package were published to the npm registry.
+
+Contributors installing from a checkout use `npm ci`, which installs
+`package-lock.json` exactly and never rewrites it. `npm install` is for
+consuming the published package and can rewrite the lockfile.
 
 If you prefer not to install globally, run the built CLI directly. Every
 example in this repository uses this form:
@@ -223,7 +230,7 @@ load:                       # OPTIONAL: default load profile
 
 | Field | Required | Type | Contract |
 | --- | --- | --- | --- |
-| `specs` | **yes** to execute | string \| string[] | OpenAPI 3.0/3.1 source(s): local file path(s) or absolute `http(s)://` URLs, mixed in one list. Relative paths resolve against the current working directory. Local and remote `$ref`s are resolved. Remote URLs must include a host; unsupported schemes and malformed URL-shaped entries are config errors naming `specs[i]`. Omitting `specs` exits `2` before k6 runs and before a results file is written. See [Remote specs](#remote-specs-network-and-error-policy). |
+| `specs` | **yes** to execute | string \| string[] | OpenAPI 3.0/3.1 source(s): local file path(s) or absolute `http(s)://` URLs, mixed in one list. Relative paths resolve against the current working directory. `$ref`s in a remote document resolve against that document's URL; a local document's `$ref`s stay local-only. Remote URLs must include a host; unsupported schemes and malformed URL-shaped entries are config errors naming `specs[i]`. Omitting `specs` exits `2` before k6 runs and before a results file is written. See [Remote specs](#remote-specs-network-and-error-policy). |
 | `operations` | **yes** | selector entries \| all | Either a non-empty list of selector entries (`{ method, path }`, `{ operationId }`, `{ tags }`, or `{ path }`) or the exact, case-sensitive literal `all`. See [Operations](#operations-selectors). |
 | `baseUrl` | no | string | Explicit request base URL. Must be a non-empty string (empty, whitespace-only, and non-string values are config errors); otherwise it is trusted verbatim and bypasses the server-URL usability gate. Overrides the fallback `servers[].url`. See [Base URL resolution](#base-url-resolution). |
 | `auth` | no | mapping | Explicit global auth (`token`, `headers`) plus scheme-derived `apiKeys` (securityScheme name → credential). Explicit values apply to **every** selected operation; `apiKeys` values are used only where the operation's effective `security` references that scheme. Values support `${ENV_VAR}`. Absent `auth` means no explicit auth headers and no derived credentials. See [Auth](#auth). |
@@ -887,7 +894,8 @@ report the message if it persists.
 
 ## Development and testing
 
-Prerequisites: Node.js >= 18 (CI uses 22), `npm ci`, and real k6 on `PATH` for
+Prerequisites: Node.js >= 18 (verified on 18.20.8 and 22.x; CI uses Node 22),
+`npm ci`, and real k6 on `PATH` for
 the suites that use it.
 
 ```sh
@@ -897,7 +905,7 @@ npm test          # build + node --test (test/**)
 npm run clean     # remove dist/
 ```
 
-At the time of this README, `npm test` runs **338 tests, 0 failed, 0 skipped**.
+At the time of this README, `npm test` runs **408 tests, 0 failed, 0 skipped**.
 The count grows as tests are added; treat the command's result as authoritative,
 not this number.
 

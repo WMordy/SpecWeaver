@@ -4,9 +4,10 @@ SpecWeaver is a Node/TypeScript CLI that turns OpenAPI 3.0/3.1 definitions plus 
 YAML config into dependency-free k6 load tests, runs them, and writes a results
 JSON.
 
-**Current phase:** P0 (correctness/trust), P1 (proof), P2 (zero-override), and
-P3 (adoption + real-k6 live proof) are done and committed. Phase status, work
-order, and limitations live
+**Current phase:** P0 (correctness/trust), P1 (proof), P2 (zero-override), P3
+(adoption + real-k6 live proof), and P4 (deferred capability expansion) are done
+and committed. P5 (public-release readiness, SPEC-42…50) is active. Phase
+status, work order, and limitations live
 in [ROADMAP.md](ROADMAP.md) — do not duplicate them here. The Kanban board is
 the source of truth for ticket status; ROADMAP tables can lag it.
 
@@ -34,8 +35,8 @@ the source of truth for ticket status; ROADMAP tables can lag it.
 
 ## Setup, build, test
 
-Prerequisites: Node >=18 (`package.json` engines; CI uses 22; the live e2e is
-documented for Node 22+) and real `k6` on `PATH` for k6-backed suites. Run
+Prerequisites: Node >=18 (`package.json` engines; verified on 18.20.8 and 22.x;
+CI uses 22) and real `k6` on `PATH` for k6-backed suites. Run
 everything from the repository root:
 
 ```sh
@@ -57,7 +58,9 @@ k6 rules:
   local opt-out is a truthy `SPECWEAVER_SKIP_LIVE_E2E` (e.g. `1`), honored only
   when `CI` and `SPECWEAVER_REQUIRE_K6` are falsy. CI sets `CI=true` and installs
   k6, so it never skips.
-- Truthy means set to anything except unset/empty/`0`/`false` (case-insensitive).
+- Truthy means set to anything except unset/empty/`0`/`false`
+  (case-insensitive); `SPECWEAVER_KEEP_TEMP` also treats `no` as false, while
+  the `CI`/`SPECWEAVER_REQUIRE_K6`/`SPECWEAVER_SKIP_LIVE_E2E` helper does not.
 - `SPECWEAVER_KEEP_TEMP=1` keeps generated k6 artifacts under `os.tmpdir()`.
 
 ## Test layout

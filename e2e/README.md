@@ -22,7 +22,7 @@ explicit script below.
 
 ## Prerequisites
 
-- Node.js 22 or newer.
+- Node.js >= 18 (verified on 18.20.8 and 22.x; CI uses Node 22).
 - Repository dependencies installed from the lockfile:
 
   ```sh
@@ -31,7 +31,7 @@ explicit script below.
 
 - A built CLI. `npm run test:live-e2e` builds it for you (`npm run build`), but a
   standalone `node --test e2e/live-e2e.mjs` expects `dist/cli.js` to exist.
-- Real `k6` v2.x on `PATH` (verified with `k6 v2.3.0`). SpecWeaver never
+- Real `k6` v2.x on `PATH` (verified with `k6 v2.4.0`). SpecWeaver never
   installs k6. Check with:
 
   ```sh
@@ -137,7 +137,7 @@ directory, or results file should remain.
 Run the same prerequisites and steps CI uses:
 
 ```sh
-node --version        # expect v22.x
+node --version        # expect v18.20.8+; CI uses v22.x
 k6 version            # expect k6 v2.x
 npm ci
 npm run build
@@ -155,5 +155,10 @@ PATH="$empty_path" CI=true "$node_bin" --test e2e/live-e2e.mjs
 rmdir "$empty_path"
 ```
 
-The test fails with the install hint. Without `CI`/`SPECWEAVER_REQUIRE_K6`,
-`SPECWEAVER_SKIP_LIVE_E2E=1` prints an explicit notice and exits 0 instead.
+Observed from a fresh clone: the inner `node --test e2e/live-e2e.mjs` exits `1`
+and prints the block beginning `The live k6 end-to-end test requires real k6 on
+PATH.` (followed by the `k6 version` probe status/stdout/stderr). A wrapper that
+captures the status and asserts it is non-zero (for example
+`test "$status" -ne 0`) passes when it does. Without
+`CI`/`SPECWEAVER_REQUIRE_K6`, `SPECWEAVER_SKIP_LIVE_E2E=1` prints an explicit
+notice and exits 0 instead.

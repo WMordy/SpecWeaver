@@ -9,9 +9,10 @@ are not demonstrated here.
 
 Common to every example:
 
-- Node.js 22 or newer and repository dependencies installed (`npm install`).
+- Node.js >= 18 (verified on 18.20.8 and 22.x; CI uses Node 22) and repository
+  dependencies installed with `npm ci`.
 - A built CLI: `npm run build` (produces `dist/cli.js`).
-- Real `k6` v2.x on `PATH` (verified with `k6 v2.3.0`). SpecWeaver never installs
+- Real `k6` v2.x on `PATH` (verified with `k6 v2.4.0`). SpecWeaver never installs
   k6 and exits `2` if it is missing.
 - The POC API running in another shell:
 
@@ -370,6 +371,7 @@ observe (for example a query-string `apiKey`) are documented in the
 | `securitySchemes`-derived bearer auth | [Auth from env](#auth-from-environment-variables) (satisfies `/admin/stats`'s `bearerAuth`, so no scheme warning) |
 | `securitySchemes`-derived header/query `apiKey` | [README auth section](../README.md#auth) (the POC API has no such endpoint) |
 | Whole-body `payloads` override | [Explicit operations + auth + payload](#explicit-operations--global-auth--payload-override) |
+| OpenAPI 3.1 `webhooks` cataloguing | [README operations](../README.md#operations-selectors) (documented; no gallery example) |
 | Multiple local `specs` | [Multi-spec + explicit `baseUrl`](#multi-spec--explicit-baseurl) |
 | Explicit `baseUrl` | [Multi-spec + explicit `baseUrl`](#multi-spec--explicit-baseurl) |
 | Generated `Cookie` header from cookie parameters | [Zero-override](#zero-override-operations-all), [Coverage warnings](#coverage-warnings) |
@@ -457,17 +459,21 @@ global static token/headers auth with `${ENV_VAR}` resolution, whole-body payloa
 overrides, multiple local specs, explicit `baseUrl`, cookie parameter generation
 (the POC spec's optional `session` cookie is generated and sent), generated
 non-JSON bodies for urlencoded/multipart/XML (SPEC-38; the POC `photo` upload's
-required multipart body is generated in demo), webhooks, `securitySchemes`-derived
+required multipart body is generated in demo), `securitySchemes`-derived
 bearer auth (SPEC-39; the README documents the header/query `apiKey` mappings),
 the remaining coverage warning, and the results JSON. The README also documents
 the shipped `operationId`, `tags`, and path-pattern selector entries; the gallery
-keeps its examples on explicit lists. Per-operation auth overrides
-(`authOperations`) are documented in the [Auth section](../README.md#auth) but
-have no dedicated gallery example.
+keeps its examples on explicit lists. OpenAPI 3.1 `webhooks` cataloguing
+(SPEC-37) and per-operation auth overrides (`authOperations`) are documented in
+the README but have no dedicated gallery example.
 
 Deferred and **not** demonstrated or claimed: tolerant/fuzzy method/path
-matching, non-JSON media types outside urlencoded/multipart/XML, `format: binary`
-file uploads (a fixed placeholder is sent), and remote `http(s)` specs.
+matching, non-JSON media types outside urlencoded/multipart/XML, and
+`format: binary` file uploads (a fixed placeholder is sent).
+
+Remote `http(s)` specs shipped in SPEC-41 (see the README
+[Remote specs](../README.md#remote-specs-network-and-error-policy) section); the
+gallery keeps its examples on local specs, so they are not demonstrated here.
 
 See the roadmap for the authoritative limitations:
 

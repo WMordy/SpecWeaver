@@ -6,7 +6,7 @@
  * implements only in-memory, non-production behaviour: no persistence, TLS,
  * rate limiting, auth flows, cookie handling, or non-JSON body parsing.
  *
- * Node 22 built-ins only (no npm install needed to run this file).
+ * Node built-ins only (no npm install needed to run this file).
  *
  * Usage (from the repository root):
  *   node examples/poc-api/server.js

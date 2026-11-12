@@ -1,7 +1,8 @@
 # SpecWeaver zero-override sample config.
 #
-# Reference: from the repository root run
-#   specweaver --config samples/specweaver.zero-override.yaml
+# Reference: from the repository root run either
+#   specweaver --config samples/specweaver.zero-override.yaml   # after `npm i -g .`; see README "Install and requirements"
+#   node dist/cli.js --config samples/specweaver.zero-override.yaml   # no global install
 # Relative `specs` paths are resolved against the current working directory,
 # so run the example from the repo root (where `samples/` lives).
 #

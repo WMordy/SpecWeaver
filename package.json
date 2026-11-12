@@ -24,6 +24,15 @@
     "load-testing",
     "faker"
   ],
+  "homepage": "https://github.com/WMordy/SpecWeaver#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WMordy/SpecWeaver.git"
+  },
+  "bugs": {
+    "url": "https://github.com/WMordy/SpecWeaver/issues"
+  },
+  "author": "WMORDY <wmordy99@gmail.com>",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.0.0",

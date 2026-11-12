@@ -1029,3 +1029,7 @@ AI coding agents: repo layout, canonical build/test commands, test layout,
 code conventions, ticket/ROADMAP workflow, and guardrails. It links back here
 for the user-facing contract, and to [`ROADMAP.md`](ROADMAP.md) for phase status
 and limitations, rather than duplicating them.
+
+## License
+
+Released under the [MIT License](LICENSE).

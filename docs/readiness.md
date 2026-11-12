@@ -817,5 +817,31 @@ plus the untracked `docs/readiness.md`. No commit, branch, tag, or push was made
   `22.22.1`). The installs still succeed, but `engine-strict=true` would fail
   them. Reconciling the documented Node/npm floor (with the
   README/AGENTS/examples wording and the CI matrix) is package-metadata work
-  outside this ticket's scope; **SPEC-51** tracks it and blocks the SPEC-47
-  v1.0.0 cut.
+  outside this ticket's scope; **SPEC-51** tracked it and blocked the SPEC-47
+  v1.0.0 cut. Resolved below in
+  [the SPEC-51 resolution](#spec-51-resolution-append-only).
+
+## SPEC-51 resolution (append-only)
+
+- **Resolution date:** 2026-11-13
+- **Decision:** mirror the dependency's range instead of keeping a floor
+  `@faker-js/faker` 10 rejects. `package.json` and the lockfile root now declare
+  `engines.node` `^20.19.0 || ^22.13.0 || ^23.5.0 || >=24.0.0` and
+  `engines.npm >=10` (faker 10's own requirement).
+- **Documentation:** the same formula replaces `Node.js >= 18` in the README
+  quick start, install/requirements and development sections, `AGENTS.md` (repo
+  map, setup, code conventions), `examples/README.md` and `e2e/README.md`; the
+  npm floor is stated wherever install prerequisites are. No historical record
+  was rewritten — the earlier Node 18.20.8 results remain marked as past runs.
+- **CI:** `.github/workflows/ci.yml` is now a matrix over Node `20.19.0` and
+  `22` (fail-fast off), each installing real k6 and running `npm ci`,
+  `npm run build`, `npm test` and `npm run test:live-e2e`.
+- **Verification:** a fresh copy of the tree on Node `v20.19.0` with npm
+  `10.8.2` (the declared floor) ran `npm ci` with no `EBADENGINE` or `npm warn`
+  output, then `npm run build` (exit `0`) and `npm test` (`414` tests, `414`
+  pass, `0` fail, `0` skipped). The live e2e remains green locally on Node
+  `v22.22.1` with k6 `v2.4.0`. Node 21 and Node <23.5 are outside the declared
+  range because faker 10 excludes them.
+- **Supersedes:** the "Engine-floor caveat (tracked)" in the SPEC-48 resolution
+  above; that caveat's warning behavior no longer applies on a supported
+  toolchain.

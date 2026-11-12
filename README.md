@@ -90,9 +90,10 @@ are explicitly not available in v1 and link to the matching limitation in
 
 ## Quick start (2 minutes)
 
-Prerequisites: Node.js >= 18 (verified on 18.20.8 and 22.x; CI uses Node 22),
-real `k6` v2.x on `PATH`, and this repository checked out. All commands run from
-the repository root.
+Prerequisites: Node.js 20.19+/22.13+/23.5+/24+ (matching `@faker-js/faker` 10;
+verified on 20.19.0 and 22.x; CI uses both), npm >= 10, real `k6` v2.x on
+`PATH`, and this repository checked out. All commands run from the repository
+root.
 
 In the first terminal, install, build, and start the checked-in POC API:
 
@@ -149,8 +150,10 @@ map. The checked-in [`samples/`](samples/) remain the canonical minimal configs.
 
 ## Install and requirements
 
-- **Node.js >= 18** (`package.json` `engines`; verified on 18.20.8 and 22.x; CI
-  uses Node 22).
+- **Node.js 20.19+/22.13+/23.5+/24+** and **npm >= 10** (`package.json`
+  `engines` mirror `@faker-js/faker` 10; verified on 20.19.0 and 22.x; CI uses
+  both). Other versions print `EBADENGINE` warnings, and fail installs when
+  `engine-strict=true`.
 - **Real `k6` v2.x on `PATH`** (verified with `k6 v2.4.0`). SpecWeaver never
   installs k6. If it is missing, SpecWeaver exits `2` before running anything
   with an actionable message. Install it from
@@ -897,9 +900,9 @@ report the message if it persists.
 
 ## Development and testing
 
-Prerequisites: Node.js >= 18 (verified on 18.20.8 and 22.x; CI uses Node 22),
-`npm ci`, and real k6 on `PATH` for
-the suites that use it.
+Prerequisites: Node.js 20.19+/22.13+/23.5+/24+ and npm >= 10 (matching
+`@faker-js/faker` 10; verified on 20.19.0 and 22.x; CI uses both), `npm ci`,
+and real k6 on `PATH` for the suites that use it.
 
 ```sh
 npm ci            # install from package-lock.json
@@ -908,7 +911,7 @@ npm test          # build + node --test (test/**)
 npm run clean     # remove dist/
 ```
 
-At the time of this README, `npm test` runs **408 tests, 0 failed, 0 skipped**.
+At the time of this README, `npm test` runs **414 tests, 0 failed, 0 skipped**.
 The count grows as tests are added; treat the command's result as authoritative,
 not this number.
 
@@ -939,8 +942,8 @@ JSON, and the POC's own request log, then cleans up. Env vars:
 (case-insensitive). Full behavior, assertions, and timeouts are in
 [`e2e/README.md`](e2e/README.md).
 
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on Node 22,
-installs real k6, then `npm ci`, `npm run build`, `npm test`, and
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on Node 20.19
+and 22, installs real k6, then `npm ci`, `npm run build`, `npm test`, and
 `npm run test:live-e2e` on every push and pull request.
 
 ### Validating README links

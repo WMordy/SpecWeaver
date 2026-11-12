@@ -22,7 +22,8 @@ explicit script below.
 
 ## Prerequisites
 
-- Node.js >= 18 (verified on 18.20.8 and 22.x; CI uses Node 22).
+- Node.js 20.19+/22.13+/23.5+/24+ and npm >= 10 (`package.json` `engines`
+  mirror `@faker-js/faker` 10; verified on 20.19.0 and 22.x; CI uses both).
 - Repository dependencies installed from the lockfile:
 
   ```sh
@@ -137,7 +138,7 @@ directory, or results file should remain.
 Run the same prerequisites and steps CI uses:
 
 ```sh
-node --version        # expect v18.20.8+; CI uses v22.x
+node --version        # expect v20.19+/v22.13+/v23.5+/v24+; CI uses v20.19 and v22.x
 k6 version            # expect k6 v2.x
 npm ci
 npm run build

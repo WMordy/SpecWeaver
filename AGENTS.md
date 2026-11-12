@@ -31,13 +31,14 @@ the source of truth for ticket status; ROADMAP tables can lag it.
 - `e2e/live-e2e.mjs` — live real-k6 suite (details in [e2e/README.md](e2e/README.md)).
 - `samples/` — minimal canonical configs/spec: `petstore.openapi.json`, `specweaver.config.yaml`, `specweaver.zero-override.yaml`.
 - `examples/` — runnable gallery ([README](examples/README.md)); `examples/poc-api/` holds the dependency-free test server, spec, and configs; `examples/configs/` and `examples/specs/` hold extra configs/specs.
-- `.github/workflows/ci.yml` — Node 22, real k6, `npm ci`, build, `npm test`, live e2e.
+- `.github/workflows/ci.yml` — Node 20.19 and 22 (matrix), real k6, `npm ci`, build, `npm test`, live e2e.
 
 ## Setup, build, test
 
-Prerequisites: Node >=18 (`package.json` engines; verified on 18.20.8 and 22.x;
-CI uses 22) and real `k6` on `PATH` for k6-backed suites. Run
-everything from the repository root:
+Prerequisites: Node 20.19+/22.13+/23.5+/24+ and npm >=10 (`package.json`
+engines mirror `@faker-js/faker` 10; verified on 20.19.0 and 22.x; CI uses both)
+and real `k6` on `PATH` for k6-backed suites. Run everything from the repository
+root:
 
 ```sh
 npm ci                 # install from package-lock.json
@@ -85,7 +86,7 @@ k6 rules:
 ## Code conventions
 
 - Strict TypeScript, ESM (`"type": "module"`, NodeNext, `strict: true`); Node
-  >=18, CI Node 22. Build with `tsc`; no bundler.
+  20.19+/22.13+/23.5+/24+, CI Node 20.19 and 22. Build with `tsc`; no bundler.
 - Diagnostics: warnings are `warning:`-prefixed on stderr and never change exit
   status; errors are `error:` on stderr. Never print resolved secrets/tokens.
 - Exit codes: `0` success; `1` k6 failure or the `--fail-on-check-failure` gate;

@@ -9,8 +9,9 @@ are not demonstrated here.
 
 Common to every example:
 
-- Node.js >= 18 (verified on 18.20.8 and 22.x; CI uses Node 22) and repository
-  dependencies installed with `npm ci`.
+- Node.js 20.19+/22.13+/23.5+/24+ and npm >= 10 (see
+  [`package.json`](../package.json) `engines`; verified on 20.19.0 and 22.x; CI
+  uses both) and repository dependencies installed with `npm ci`.
 - A built CLI: `npm run build` (produces `dist/cli.js`).
 - Real `k6` v2.x on `PATH` (verified with `k6 v2.4.0`). SpecWeaver never installs
   k6 and exits `2` if it is missing.

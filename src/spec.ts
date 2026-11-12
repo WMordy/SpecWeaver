@@ -9,10 +9,15 @@
  *   verifies the version, resolves every `$ref` (internal and external file
  *   refs), and returns the resolved document plus a normalized operation
  *   catalog.
- * - {@link loadSpecs} does the same for several sources in order.
+ * - {@link loadSpecs} does the same for several sources in order, and
+ *   additionally fetches absolute `http(s)://` sources (SPEC-41).
  *
- * Remote/http(s) sources, OpenAPI 2.0 / Swagger, GraphQL, and non-JSON request
- * bodies are intentionally out of scope for v1.
+ * Remote fetching policy (SPEC-41) is explicit and documented in the README:
+ * `fetch` with a 10 second `AbortController` timeout, a 5 MiB body cap, and a
+ * manual redirect loop capped at 10 hops that rejects `https -> http`
+ * downgrades. Documents are memoized per run. There is no DNS/IP-level SSRF
+ * filtering; the operator owns the configured URLs. OpenAPI 2.0 / Swagger,
+ * GraphQL, and non-JSON request bodies remain out of scope.
  */
 import { readFileSync } from "node:fs";
 import { dirname, extname, isAbsolute, resolve as resolvePath } from "node:path";
@@ -92,9 +97,12 @@ export interface OperationEntry {
   securitySchemes?: Record<string, SecuritySchemeObject>;
 }
 
-/** The result of loading one local OpenAPI document. */
+/** The result of loading one OpenAPI document (local file or remote URL). */
 export interface LoadedSpec {
-  /** The source path exactly as requested (for error messages). */
+  /**
+   * The source as requested for local files; remote URLs are normalized and
+   * have any userinfo redacted, so a credentials-bearing URL is never printed.
+   */
   source: string;
   /** The fully `$ref`-resolved document. */
   document: JsonObject;
@@ -131,6 +139,131 @@ const OPERATION_METHODS = [
   "options",
   "trace",
 ] as const;
+
+/** Default per-fetch timeout for remote specs (SPEC-41). */
+const FETCH_TIMEOUT_MS = 10_000;
+/** Hard cap on a fetched spec body; larger responses fail the fetch (SPEC-41). */
+const MAX_SPEC_BYTES = 5 * 1024 * 1024;
+/** Maximum redirect hops followed for one spec fetch (SPEC-41). */
+const MAX_REDIRECTS = 10;
+/** `fetch` statuses that are redirects under `redirect: "manual"`. */
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+/** Placeholder used when redacting credentials from a spec URL. */
+const REDACTED = "***";
+
+/** True for an absolute `http(s)://` spec source. */
+function isRemoteUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+/**
+ * Render a spec source for diagnostics. Local paths are returned unchanged;
+ * remote URLs have any userinfo (username/password) masked, because a
+ * credentials-bearing URL must never be printed (SPEC-41).
+ */
+function redactSpecSource(source: string): string {
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(source)) {
+    return source;
+  }
+  try {
+    const url = new URL(source);
+    if (url.username === "" && url.password === "") {
+      return url.href;
+    }
+    url.username = REDACTED;
+    url.password = "";
+    return url.href;
+  } catch {
+    return REDACTED;
+  }
+}
+
+/** The host (no credentials, no path) of a URL, for actionable errors. */
+function specHost(url: string): string {
+  try {
+    return new URL(url).host || REDACTED;
+  } catch {
+    return REDACTED;
+  }
+}
+
+/**
+ * Validate a `specs` entry that looks like a URL. Returns the normalized URL
+ * for an absolute `http(s)` URL with a host, or `undefined` for a local path.
+ *
+ * @throws {SpecError} for URL-shaped entries that cannot be fetched.
+ */
+function remoteUrlFor(source: string): string | undefined {
+  const looksLikeUrl = /^[a-z][a-z0-9+.-]*:\/\//i.test(source);
+  if (!looksLikeUrl) {
+    return undefined;
+  }
+  if (!isRemoteUrl(source)) {
+    const scheme = source.slice(0, source.indexOf("://") + 1);
+    throw new SpecError(
+      `Unsupported spec URL scheme "${scheme}": only http and https remote specs are supported`,
+    );
+  }
+  let url: URL;
+  try {
+    url = new URL(source);
+  } catch {
+    throw new SpecError(
+      `Invalid spec URL "${redactSpecSource(source)}": expected an absolute http(s) URL with a host`,
+    );
+  }
+  if (url.hostname === "") {
+    throw new SpecError(
+      `Invalid spec URL "${redactSpecSource(source)}": the URL must include a host`,
+    );
+  }
+  return url.href;
+}
+
+/** Replace credential substrings that `fetch` may echo in its own message. */
+function redactUrlSecrets(text: string, url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return text;
+  }
+  const secrets = [parsed.username, parsed.password].filter(
+    (secret) => secret !== "",
+  );
+  if (secrets.length === 0) {
+    return text;
+  }
+  const safe = redactSpecSource(url);
+  let redacted = text.split(url).join(safe);
+  for (const secret of secrets) {
+    const variants = new Set([secret]);
+    try {
+      variants.add(decodeURIComponent(secret));
+    } catch {
+      // Keep the raw form when it is not valid percent-encoding.
+    }
+    for (const variant of variants) {
+      redacted = redacted.split(variant).join(REDACTED);
+    }
+  }
+  return redacted;
+}
+
+/** Best-effort reason for a failed `fetch`, including Node's `cause` code. */
+function fetchFailureReason(error: unknown, url: string): string {
+  let message: string;
+  if (error instanceof Error) {
+    const cause = (error as { cause?: unknown }).cause;
+    message =
+      cause instanceof Error && cause.message !== ""
+        ? cause.message
+        : error.message;
+  } else {
+    message = String(error);
+  }
+  return redactUrlSecrets(message, url);
+}
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -211,10 +344,262 @@ function readSpecFile(absolute: string): unknown {
 }
 
 /**
+ * Read a spec body, enforcing the 5 MiB cap while streaming so an oversized
+ * response is never buffered in full (SPEC-41).
+ */
+async function readCappedBody(response: Response, host: string): Promise<string> {
+  const body = response.body;
+  if (body === null) {
+    return "";
+  }
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    total += value.byteLength;
+    if (total > MAX_SPEC_BYTES) {
+      await reader.cancel().catch(() => {});
+      throw new SpecError(
+        `Spec fetched from "${host}" exceeds the ${MAX_SPEC_BYTES / (1024 * 1024)} MiB size cap`,
+      );
+    }
+    chunks.push(value);
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(merged);
+}
+
+/**
+ * Resolve and validate one redirect hop for a remote spec fetch (SPEC-41).
+ *
+ * Relative `Location` values resolve against the current URL hierarchy.
+ * `http -> https` upgrades are allowed; `https -> http` downgrades are
+ * rejected. `redirects` is the number of hops already followed.
+ *
+ * Exported so the redirect policy can be exercised directly by tests without
+ * standing up a TLS server.
+ *
+ * @throws {SpecError} for a missing/invalid `Location`, the 10-hop limit, a
+ *   non-`http(s)` target, or an `https -> http` downgrade.
+ */
+export function resolveRedirect(
+  current: string,
+  location: string | null,
+  redirects: number,
+): string {
+  const fromHost = specHost(current);
+  if (location === null || location.trim() === "") {
+    throw new SpecError(`Redirect from "${fromHost}" is missing a Location header`);
+  }
+  if (redirects >= MAX_REDIRECTS) {
+    throw new SpecError(
+      `Too many redirects fetching a spec from "${fromHost}": stopped after ${MAX_REDIRECTS} hops`,
+    );
+  }
+  let next: URL;
+  try {
+    next = new URL(location, current);
+  } catch {
+    throw new SpecError(`Redirect from "${fromHost}" has an invalid Location header`);
+  }
+  if (next.protocol !== "http:" && next.protocol !== "https:") {
+    throw new SpecError(
+      `Redirect from "${fromHost}" targets unsupported protocol "${next.protocol}": only http and https are followed`,
+    );
+  }
+  const from = new URL(current);
+  if (from.protocol === "https:" && next.protocol === "http:") {
+    throw new SpecError(
+      `Refusing insecure redirect from "https://${from.host}" to "http://${next.host}": an https spec URL must not downgrade to http`,
+    );
+  }
+  return next.href;
+}
+
+/**
+ * Fetch a remote spec body under the SPEC-41 network policy: a 10 second
+ * timeout covering the whole redirect chain, a manual redirect loop capped at
+ * 10 hops, and the 5 MiB body cap.
+ *
+ * @throws {SpecError} with an actionable message naming the host (never the
+ *   full credentials-bearing URL) for every failure mode.
+ */
+async function fetchSpecText(url: string): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  let current = url;
+  let redirects = 0;
+  try {
+    for (;;) {
+      const response = await fetch(current, {
+        redirect: "manual",
+        signal: controller.signal,
+      });
+      const host = specHost(current);
+      if (REDIRECT_STATUSES.has(response.status)) {
+        await response.body?.cancel().catch(() => {});
+        current = resolveRedirect(
+          current,
+          response.headers.get("location"),
+          redirects,
+        );
+        redirects += 1;
+        continue;
+      }
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        const suffix = response.statusText === "" ? "" : ` ${response.statusText}`;
+        throw new SpecError(
+          `Failed to fetch spec from "${host}": HTTP ${response.status}${suffix}`,
+        );
+      }
+      return await readCappedBody(response, host);
+    }
+  } catch (error) {
+    if (error instanceof SpecError) {
+      throw error;
+    }
+    if (controller.signal.aborted) {
+      throw new SpecError(
+        `Timed out after ${FETCH_TIMEOUT_MS / 1000}s fetching spec from "${specHost(current)}"`,
+      );
+    }
+    throw new SpecError(
+      `Failed to fetch spec from "${specHost(current)}": ${fetchFailureReason(error, current)}`,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Parse remote spec text: JSON first, then YAML (SPEC-41). A remote source has
+ * no filesystem extension to key off, so both parsers are always attempted.
+ */
+function parseRemoteText(text: string, sourceName: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (jsonError) {
+    try {
+      return parseYaml(text);
+    } catch (yamlError) {
+      throw new SpecError(
+        `Invalid JSON or YAML in "${sourceName}": ${reason(yamlError)} (JSON: ${reason(jsonError)})`,
+      );
+    }
+  }
+}
+
+/** Fetch (or reuse) a remote document, parsing and alias-guarding it once. */
+async function fetchRemoteDocument(
+  url: string,
+  documents: Map<string, unknown>,
+): Promise<unknown> {
+  if (documents.has(url)) {
+    return documents.get(url);
+  }
+  const label = redactSpecSource(url);
+  const text = await fetchSpecText(url);
+  const parsed = parseRemoteText(text, label);
+  detectAliasCycles(parsed, label);
+  documents.set(url, parsed);
+  return parsed;
+}
+
+/** Resolve one `$ref`'s file part to an absolute remote URL. */
+function remoteRefTarget(ref: string, base: string): string {
+  const hashIndex = ref.indexOf("#");
+  const filePart = hashIndex === -1 ? ref : ref.slice(0, hashIndex);
+  if (filePart === "") {
+    return base;
+  }
+  const labelFrom = redactSpecSource(base);
+  if (/^[a-z][a-z0-9+.-]*:/i.test(filePart) && !isRemoteUrl(filePart)) {
+    throw new SpecError(
+      `Remote $ref "${ref}" in "${labelFrom}" is not supported: only http(s) references can be fetched`,
+    );
+  }
+  let target: URL;
+  try {
+    target = new URL(filePart, base);
+  } catch {
+    throw new SpecError(
+      `Cannot resolve $ref "${ref}" in "${labelFrom}": malformed URL reference`,
+    );
+  }
+  if (target.protocol !== "http:" && target.protocol !== "https:") {
+    throw new SpecError(
+      `Remote $ref "${ref}" in "${labelFrom}" is not supported: only http(s) references can be fetched`,
+    );
+  }
+  return target.href;
+}
+
+/** Collect every `$ref` string reachable in a (cycle-free) parsed document. */
+function collectRefs(node: unknown, refs: string[] = []): string[] {
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      collectRefs(item, refs);
+    }
+    return refs;
+  }
+  if (!isObject(node)) {
+    return refs;
+  }
+  if (typeof node.$ref === "string") {
+    refs.push(node.$ref);
+  }
+  for (const value of Object.values(node)) {
+    collectRefs(value, refs);
+  }
+  return refs;
+}
+
+/** Every remote document referenced by `document`, resolved against `base`. */
+function collectRefTargets(document: unknown, base: string): string[] {
+  return collectRefs(document)
+    .map((ref) => remoteRefTarget(ref, base))
+    .filter((target) => target !== base);
+}
+
+/**
+ * Fetch the transitive closure of remote `$ref` targets before resolution.
+ * Shared memoization means each document is fetched at most once per run.
+ */
+async function preloadRemoteRefs(
+  document: unknown,
+  base: string,
+  documents: Map<string, unknown>,
+): Promise<void> {
+  const queue = collectRefTargets(document, base);
+  while (queue.length > 0) {
+    const target = queue.shift() as string;
+    if (documents.has(target)) {
+      continue;
+    }
+    const parsed = await fetchRemoteDocument(target, documents);
+    queue.push(...collectRefTargets(parsed, target));
+  }
+}
+
+/**
  * Resolves `$ref` nodes to their targets, inlining internal and external file
  * references. Circular reference chains are handled by pre-registering a
  * placeholder for each in-progress target, so a cycle yields a live cyclic
  * object graph instead of unbounded recursion.
+ *
+ * Remote documents (SPEC-41) are preloaded by {@link preloadRemoteRefs} and
+ * looked up in `remoteDocuments`; local documents are still read from disk on
+ * demand, so local-only behavior is unchanged.
  */
 class RefResolver {
   private readonly documents = new Map<string, unknown>();
@@ -223,6 +608,7 @@ class RefResolver {
   constructor(
     private readonly root: string,
     rootDocument: unknown,
+    private readonly remoteDocuments?: ReadonlyMap<string, unknown>,
   ) {
     this.documents.set(root, rootDocument);
   }
@@ -235,6 +621,16 @@ class RefResolver {
     const cached = this.documents.get(file);
     if (cached !== undefined || this.documents.has(file)) {
       return cached;
+    }
+    if (isRemoteUrl(file)) {
+      const remote = this.remoteDocuments?.get(file);
+      if (remote === undefined && !this.remoteDocuments?.has(file)) {
+        throw new SpecError(
+          `Internal error: remote document "${redactSpecSource(file)}" was not preloaded`,
+        );
+      }
+      this.documents.set(file, remote);
+      return remote;
     }
     const document = readSpecFile(file);
     this.documents.set(file, document);
@@ -286,7 +682,12 @@ class RefResolver {
       return this.resolved.get(key);
     }
 
-    const target = getPointer(this.document(targetFile), pointer, ref, targetFile);
+    const target = getPointer(
+      this.document(targetFile),
+      pointer,
+      ref,
+      redactSpecSource(targetFile),
+    );
 
     // Pre-register a placeholder before recursing so a cyclic `$ref` chain
     // terminates and every occurrence shares the same node.
@@ -311,14 +712,20 @@ class RefResolver {
   }
 
   private parseRef(ref: string, file: string): { targetFile: string; pointer: string } {
+    const hashIndex = ref.indexOf("#");
+    const filePart = hashIndex === -1 ? ref : ref.slice(0, hashIndex);
+    const pointer = hashIndex === -1 ? "" : ref.slice(hashIndex + 1);
+    if (isRemoteUrl(file)) {
+      if (filePart === "") {
+        return { targetFile: file, pointer };
+      }
+      return { targetFile: remoteRefTarget(ref, file), pointer };
+    }
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(ref)) {
       throw new SpecError(
         `Remote $ref "${ref}" is not supported: only local spec files can be referenced`,
       );
     }
-    const hashIndex = ref.indexOf("#");
-    const filePart = hashIndex === -1 ? ref : ref.slice(0, hashIndex);
-    const pointer = hashIndex === -1 ? "" : ref.slice(hashIndex + 1);
     let targetFile: string;
     if (filePart === "") {
       targetFile = file;
@@ -590,6 +997,9 @@ export function buildOperationCatalog(document: JsonObject): OperationEntry[] {
 /**
  * Load, validate, and fully resolve a local OpenAPI 3.0/3.1 document.
  *
+ * Remote `http(s)://` sources are rejected here because fetching is
+ * asynchronous; pass them to {@link loadSpecs}.
+ *
  * @param source Local file path to a JSON or YAML spec (resolved against
  *   `cwd` when relative).
  * @throws {SpecError} when the file cannot be read, is malformed, is not a
@@ -605,6 +1015,11 @@ export function buildOperationCatalog(document: JsonObject): OperationEntry[] {
  * spec sources independent of where the config file happens to live.
  */
 export function loadSpec(source: string): LoadedSpec {
+  if (isRemoteUrl(source)) {
+    throw new SpecError(
+      `Spec "${redactSpecSource(source)}" is a remote URL; fetch it with loadSpecs(), which loads remote documents asynchronously`,
+    );
+  }
   const absolute = isAbsolute(source) ? source : resolvePath(process.cwd(), source);
   const parsed = readSpecFile(absolute);
   validateOpenApi(parsed, source);
@@ -616,13 +1031,45 @@ export function loadSpec(source: string): LoadedSpec {
   };
 }
 
+/** Load, validate, and resolve one remote document under the SPEC-41 policy. */
+async function loadRemoteSpec(
+  url: string,
+  documents: Map<string, unknown>,
+): Promise<LoadedSpec> {
+  const label = redactSpecSource(url);
+  const root = await fetchRemoteDocument(url, documents);
+  validateOpenApi(root, label);
+  await preloadRemoteRefs(root, url, documents);
+  const document = new RefResolver(url, root, documents).resolve();
+  return {
+    source: label,
+    document: document as JsonObject,
+    operations: buildOperationCatalog(document as JsonObject),
+  };
+}
+
 /**
- * Load several local specs in order. Stops at the first {@link SpecError}.
+ * Load several specs in order, local paths and absolute `http(s)` URLs alike
+ * (SPEC-41). Stops at the first {@link SpecError}.
  *
  * Relative paths share {@link loadSpec}'s `process.cwd()` base directory.
+ * Remote documents — including on-demand `$ref` targets — are fetched at most
+ * once per call through a shared memo, which also covers repeated `specs`
+ * URLs. Remote sources are never fetched concurrently, so failure reporting
+ * follows `specs` order deterministically.
  */
-export function loadSpecs(sources: string[]): LoadedSpec[] {
-  return sources.map((source) => loadSpec(source));
+export async function loadSpecs(sources: string[]): Promise<LoadedSpec[]> {
+  const documents = new Map<string, unknown>();
+  const loaded: LoadedSpec[] = [];
+  for (const source of sources) {
+    const remote = remoteUrlFor(source);
+    loaded.push(
+      remote === undefined
+        ? loadSpec(source)
+        : await loadRemoteSpec(remote, documents),
+    );
+  }
+  return loaded;
 }
 
 /**

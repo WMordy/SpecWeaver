@@ -7,7 +7,7 @@
 #
 # The full config schema is documented in README.md.
 
-# OpenAPI source(s) to load. Local file paths only (URLs are not fetched).
+# OpenAPI source(s) to load: local file path(s) and/or absolute http(s) URLs.
 # Required to execute; string or list of strings.
 # Requests default to the first usable `servers[].url` across the specs
 # (unusable entries are skipped with a warning). Add an optional `baseUrl:` (see

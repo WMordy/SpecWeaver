@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,6 +10,7 @@ import {
   buildOperationCatalog,
   loadSpec,
   loadSpecs,
+  resolveRedirect,
   zeroOperationWarnings,
 } from "../dist/spec.js";
 
@@ -795,14 +797,349 @@ paths:
   assert.throws(() => loadSpec(path), /Remote \$ref .* not supported/);
 });
 
-test("loadSpecs loads multiple local sources in order", () => {
+test("loadSpecs loads multiple local sources in order", async () => {
   const dir = makeDir();
   const first = write(dir, "a.yaml", OAS30_YAML);
   const second = write(dir, "b.json", JSON.stringify(OAS31_OBJECT));
 
-  const loaded = loadSpecs([first, second]);
+  const loaded = await loadSpecs([first, second]);
 
   assert.equal(loaded.length, 2);
   assert.equal(loaded[0].document.openapi, "3.0.3");
   assert.equal(loaded[1].document.openapi, "3.1.0");
+});
+
+// --- Remote specs (SPEC-41) -------------------------------------------------
+
+/** A minimal valid OpenAPI 3.0 document served by the remote tests. */
+const REMOTE_OAS30 = {
+  openapi: "3.0.3",
+  info: { title: "Remote", version: "1.0.0" },
+  servers: [{ url: "http://127.0.0.1:9" }],
+  paths: {
+    "/pets": {
+      get: {
+        operationId: "listPets",
+        responses: { "200": { description: "ok" } },
+      },
+    },
+  },
+};
+
+/**
+ * Start an in-process stub HTTP server for one test. `handler` receives
+ * `(req, res, requests)`; every request path is recorded in `requests`.
+ */
+async function listen(t, handler) {
+  const requests = [];
+  const server = createServer((req, res) => {
+    requests.push(req.url);
+    res.on("error", () => {});
+    handler(req, res, requests);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(
+    () =>
+      new Promise((resolve) => {
+        server.close(resolve);
+        server.closeAllConnections?.();
+      }),
+  );
+  const { port } = server.address();
+  return { base: `http://127.0.0.1:${port}`, requests };
+}
+
+test("fetches a remote JSON spec and catalogues its operations (SPEC-41)", async (t) => {
+  const { base, requests } = await listen(t, (req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(REMOTE_OAS30));
+  });
+
+  const [loaded] = await loadSpecs([`${base}/spec.json`]);
+
+  assert.equal(loaded.source, `${base}/spec.json`);
+  assert.equal(loaded.document.openapi, "3.0.3");
+  assert.deepEqual(
+    loaded.operations.map((op) => `${op.method} ${op.path}`),
+    ["GET /pets"],
+  );
+  assert.deepEqual(requests, ["/spec.json"]);
+});
+
+test("fetches a remote YAML spec (JSON first, then YAML) (SPEC-41)", async (t) => {
+  const { base } = await listen(t, (req, res) => {
+    res.writeHead(200, { "content-type": "application/yaml" });
+    res.end(OAS30_YAML);
+  });
+
+  const [loaded] = await loadSpecs([`${base}/openapi.yaml`]);
+
+  assert.equal(loaded.document.openapi, "3.0.3");
+  assert.equal(loaded.operations[0].operationId, "listPets");
+});
+
+test("a failing remote fetch is an actionable SpecError naming the host (SPEC-41)", async () => {
+  await assert.rejects(loadSpecs(["http://127.0.0.1:1/spec.json"]), (error) => {
+    assert.ok(error instanceof SpecError);
+    assert.match(error.message, /Failed to fetch spec from "127\.0\.0\.1:1":/);
+    assert.doesNotMatch(error.message, /at .*\.js:\d+/);
+    return true;
+  });
+});
+
+test("non-2xx remote responses fail with the status (SPEC-41)", async (t) => {
+  const { base } = await listen(t, (req, res) => {
+    res.writeHead(503, "Service Unavailable");
+    res.end("down");
+  });
+
+  await assert.rejects(loadSpecs([`${base}/spec.json`]), /HTTP 503 Service Unavailable/);
+});
+
+test("oversized remote bodies fail at the 5 MiB cap (SPEC-41)", async (t) => {
+  const { base } = await listen(t, (req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end("x".repeat(5 * 1024 * 1024 + 1));
+  });
+
+  await assert.rejects(
+    loadSpecs([`${base}/big.json`]),
+    /exceeds the 5 MiB size cap/,
+  );
+});
+
+test("unparsable remote content fails as invalid JSON or YAML (SPEC-41)", async (t) => {
+  const { base } = await listen(t, (req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end("a: [1, 2");
+  });
+
+  await assert.rejects(loadSpecs([`${base}/bad.json`]), /Invalid JSON or YAML/);
+});
+
+test("a remote fetch timeout aborts after 10 seconds (SPEC-41)", async (t) => {
+  const { base } = await listen(t, () => {
+    // Never respond; the client-side AbortController must fire.
+  });
+
+  await assert.rejects(
+    loadSpecs([`${base}/slow.json`]),
+    /Timed out after 10s fetching spec from "127\.0\.0\.1:\d+"/,
+  );
+});
+
+test("redirects are followed manually with relative Location resolution (SPEC-41)", async (t) => {
+  const body = JSON.stringify(REMOTE_OAS30);
+  const { base, requests } = await listen(t, (req, res) => {
+    if (req.url === "/start") {
+      res.writeHead(302, { location: "./real.json" });
+      res.end();
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(body);
+  });
+
+  const [loaded] = await loadSpecs([`${base}/start`]);
+
+  assert.equal(loaded.operations.length, 1);
+  assert.deepEqual(requests, ["/start", "/real.json"]);
+});
+
+test("the redirect policy resolves relative hops and rejects https->http (SPEC-41)", () => {
+  assert.equal(
+    resolveRedirect("https://example.com/a/b/spec.yaml", "../c.yaml", 0),
+    "https://example.com/a/c.yaml",
+  );
+  assert.equal(
+    resolveRedirect("http://example.com/a", "https://example.com/a", 0),
+    "https://example.com/a",
+  );
+  assert.equal(
+    resolveRedirect("https://example.com/a", "/b", 9),
+    "https://example.com/b",
+  );
+  assert.throws(
+    () => resolveRedirect("https://example.com/a", "http://example.com/b", 0),
+    /Refusing insecure redirect from "https:\/\/example\.com" to "http:\/\/example\.com"/,
+  );
+  assert.throws(
+    () => resolveRedirect("https://example.com/a", "/b", 10),
+    /Too many redirects .* stopped after 10 hops/,
+  );
+  assert.throws(
+    () => resolveRedirect("https://example.com/a", null, 0),
+    /missing a Location header/,
+  );
+});
+
+test("relative external $refs in a remote document resolve against its URL (SPEC-41)", async (t) => {
+  const root = {
+    openapi: "3.0.3",
+    info: { title: "Remote", version: "1.0.0" },
+    paths: {
+      "/pets": {
+        post: {
+          operationId: "createPet",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "schemas/pet.yaml#/Pet" },
+              },
+            },
+          },
+          responses: { "201": { description: "created" } },
+        },
+      },
+    },
+  };
+  const pet = { Pet: { type: "object", properties: { name: { type: "string" } } } };
+  const { base, requests } = await listen(t, (req, res) => {
+    res.writeHead(200, { "content-type": "application/yaml" });
+    if (req.url === "/api/spec.yaml") {
+      res.end(JSON.stringify(root));
+      return;
+    }
+    if (req.url === "/api/schemas/pet.yaml") {
+      res.end(JSON.stringify(pet));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+
+  const [loaded] = await loadSpecs([`${base}/api/spec.yaml`]);
+  const schema =
+    loaded.operations[0].requestBody.content["application/json"].schema;
+
+  assert.deepEqual(schema, pet.Pet);
+  assert.deepEqual(requests, ["/api/spec.yaml", "/api/schemas/pet.yaml"]);
+});
+
+test("remote $ref targets normalize ../ and share the per-run fetch memo (SPEC-41)", async (t) => {
+  const root = {
+    openapi: "3.0.3",
+    info: { title: "Remote", version: "1.0.0" },
+    paths: {
+      "/pets": {
+        get: {
+          operationId: "listPets",
+          responses: {
+            "200": {
+              description: "ok",
+              content: {
+                "application/json": {
+                  schema: { $ref: "../../common.yaml#/Pet" },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  const common = {
+    Pet: { type: "object", properties: { id: { type: "string" } } },
+  };
+  const { base, requests } = await listen(t, (req, res) => {
+    res.writeHead(200, { "content-type": "application/yaml" });
+    if (req.url === "/api/v1/spec.yaml") {
+      res.end(JSON.stringify(root));
+      return;
+    }
+    if (req.url === "/common.yaml") {
+      res.end(JSON.stringify(common));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+
+  const url = `${base}/api/v1/spec.yaml`;
+  const loaded = await loadSpecs([url, url]);
+
+  assert.equal(loaded.length, 2);
+  assert.deepEqual(
+    loaded[0].document.paths["/pets"].get.responses["200"].content[
+      "application/json"
+    ].schema,
+    common.Pet,
+  );
+  // One fetch for the root (shared by both `specs` entries) and one for the
+  // `../`-normalized ref target.
+  assert.deepEqual(requests, ["/api/v1/spec.yaml", "/common.yaml"]);
+});
+
+test("local and remote specs load together in order, deterministically (SPEC-41)", async (t) => {
+  const dir = makeDir();
+  const local = write(dir, "local.yaml", OAS30_YAML);
+  const { base } = await listen(t, (req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        ...REMOTE_OAS30,
+        paths: {
+          "/owners": {
+            get: { responses: { "200": { description: "ok" } } },
+          },
+        },
+      }),
+    );
+  });
+
+  const loaded = await loadSpecs([local, `${base}/remote.json`]);
+
+  assert.deepEqual(
+    loaded.map((spec) => spec.document.openapi),
+    ["3.0.3", "3.0.3"],
+  );
+  assert.deepEqual(
+    loaded.flatMap((spec) => spec.operations.map((op) => op.path)),
+    ["/pets", "/owners"],
+  );
+  assert.equal(buildOperationCatalog(loaded[1].document)[0].path, "/owners");
+});
+
+test("a parse-valid, operation-less remote document warns like a local one (SPEC-41)", async (t) => {
+  const { base } = await listen(t, (req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        openapi: "3.1.0",
+        info: { title: "Components only", version: "1.0.0" },
+        components: { schemas: { Pet: { type: "object" } } },
+      }),
+    );
+  });
+
+  const loaded = await loadSpecs([`${base}/components.json`]);
+  const [warning] = zeroOperationWarnings(loaded);
+
+  assert.equal(loaded[0].operations.length, 0);
+  assert.match(warning, /contributes zero operations/);
+  assert.match(warning, new RegExp(base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("credentials in a remote spec URL are never printed (SPEC-41)", async (t) => {
+  const { base } = await listen(t, (req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(REMOTE_OAS30));
+  });
+  const url = base.replace("http://", "http://user:s3cret@");
+
+  // Node's `fetch` refuses credential-bearing URLs; whatever the outcome, the
+  // diagnostic may name the host but must never echo the credentials.
+  await assert.rejects(loadSpecs([url]), (error) => {
+    assert.match(error.message, /Failed to fetch spec from "127\.0\.0\.1:\d+"/);
+    assert.doesNotMatch(error.message, /s3cret|user:/);
+    return true;
+  });
+});
+
+test("loadSpec rejects a remote source with a pointer to loadSpecs (SPEC-41)", () => {
+  assert.throws(
+    () => loadSpec("https://example.com/spec.json"),
+    /is a remote URL; fetch it with loadSpecs\(\)/,
+  );
 });

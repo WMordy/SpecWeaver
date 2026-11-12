@@ -254,13 +254,14 @@ async function run(options: CliOptions): Promise<number> {
     `Load profile: ${config.load.vus} virtual user(s) for ${config.load.duration}.\n`,
   );
 
-  // Load and resolve every spec so downstream stages (payload generation,
-  // script emission) have a normalized operation catalog. A missing/invalid
-  // spec is a hard error and exits non-zero.
+  // Load and resolve every spec (local files and remote URLs) so downstream
+  // stages (payload generation, script emission) have a normalized operation
+  // catalog. A missing/invalid/unfetchable spec is a hard error and exits
+  // non-zero before k6 runs.
   let loadedSpecs: LoadedSpec[] = [];
   if (config.specs !== undefined) {
     try {
-      loadedSpecs = loadSpecs(config.specs);
+      loadedSpecs = await loadSpecs(config.specs);
     } catch (error) {
       if (error instanceof SpecError) {
         process.stderr.write(`${error.message}\n`);

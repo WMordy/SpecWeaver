@@ -72,6 +72,44 @@ test("specs accepts a single string as well as a list", () => {
   assert.deepEqual(single.config.specs, ["./openapi.yaml"]);
 });
 
+test("specs accepts absolute http(s) URLs and local paths together (SPEC-41)", () => {
+  const { config } = parseConfig(
+    [
+      "specs:",
+      "  - ./openapi.yaml",
+      "  - https://example.com/specs/petstore.json",
+      "  - http://127.0.0.1:8080/openapi.yaml",
+      "operations: all",
+      "",
+    ].join("\n"),
+  );
+  assert.deepEqual(config.specs, [
+    "./openapi.yaml",
+    "https://example.com/specs/petstore.json",
+    "http://127.0.0.1:8080/openapi.yaml",
+  ]);
+});
+
+test("malformed URL-shaped specs entries are aggregated with specs[i] labels", () => {
+  const yaml = `specs:
+  - "https://exa mple.com/openapi.yaml"
+  - "ftp://example.com/openapi.yaml"
+  - ""
+  - ./openapi.yaml
+operations: all
+`;
+  assert.throws(
+    () => parseConfig(yaml),
+    (error) => {
+      assert.ok(error instanceof ConfigError);
+      assert.match(error.message, /`specs\[0\]` must be a local file path or an absolute http\(s\) URL with a host/);
+      assert.match(error.message, /`specs\[1\]` uses unsupported URL scheme "ftp:"/);
+      assert.match(error.message, /`specs\[2\]` must be a non-empty string/);
+      return true;
+    },
+  );
+});
+
 test("baseUrl is exposed on the typed Config when present and valid", () => {
   const { config } = parseConfig(
     "operations:\n  - method: GET\n    path: /pets\nbaseUrl: https://api.example.com\n",

@@ -10,8 +10,9 @@
  * whole-value JSON `body` replacement for the matching operation.
  *
  * Config input is YAML only. JSON/TOML input and config-file discovery are
- * intentionally not supported. `specs` entries are local filesystem paths only:
- * remote `http(s)://` URLs are not fetched.
+ * intentionally not supported. `specs` entries are local filesystem paths or
+ * absolute `http(s)://` URLs, which are fetched at load time (SPEC-41); the
+ * network policy is documented in the README.
  *
  * `specs` is required to execute: because `operations` is always required
  * (SPEC-2), a config that omits `specs` can never run anything. This
@@ -23,8 +24,9 @@
  * Schema:
  *
  * ```yaml
- * specs:                      # REQUIRED to execute, local path(s) or list (no URLs)
+ * specs:                      # REQUIRED to execute: local path(s)/URL(s) or list
  *   - ./openapi.yaml
+ *   - https://example.com/openapi.json
  * operations:                 # REQUIRED: non-empty list, or the literal `all`
  *   - method: GET             # explicit form: exact `METHOD path` match
  *     path: /pets
@@ -176,7 +178,9 @@ export interface PayloadOverride {
  */
 export interface Config {
   /**
-   * Local OpenAPI source path(s) (JSON or YAML) to load; URLs are not fetched.
+   * OpenAPI source(s) (JSON or YAML) to load: local paths, absolute `http(s)`
+   * URLs, or a mix (SPEC-41). Remote URLs must include a host; unsupported
+   * schemes and malformed URL-shaped entries are config errors.
    * Required to execute: `operations` is always present (a non-empty list or
    * the literal `"all"`), and without a spec there is no catalog to select from,
    * so the CLI exits `2` before running k6 or writing results (SPEC-14).
@@ -514,10 +518,45 @@ function validateSpecs(value: unknown, errors: string[]): string[] | undefined {
       errors.push(`\`${at}\` must be a non-empty string`);
       return;
     }
+    if (!isValidSpecSource(entry, at, errors)) {
+      return;
+    }
     specs.push(entry);
   });
 
   return specs.length > 0 ? specs : undefined;
+}
+
+/**
+ * Accept a local path unchanged, or validate a URL-shaped entry as an absolute
+ * `http(s)` URL with a host (SPEC-41). URL-shaped entries that cannot be
+ * fetched are aggregated into the config errors instead of failing at load
+ * time with a less actionable message.
+ */
+function isValidSpecSource(entry: string, at: string, errors: string[]): boolean {
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(entry)) {
+    return true;
+  }
+  let url: URL;
+  try {
+    url = new URL(entry);
+  } catch {
+    errors.push(
+      `\`${at}\` must be a local file path or an absolute http(s) URL with a host`,
+    );
+    return false;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    errors.push(
+      `\`${at}\` uses unsupported URL scheme "${url.protocol}": only http and https remote specs are supported`,
+    );
+    return false;
+  }
+  if (url.hostname === "") {
+    errors.push(`\`${at}\` must be an absolute http(s) URL with a host`);
+    return false;
+  }
+  return true;
 }
 
 function validateLoad(value: unknown, errors: string[]): PartialLoad {

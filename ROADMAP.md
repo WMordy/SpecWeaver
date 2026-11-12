@@ -15,13 +15,14 @@ complete and committed. The P2 zero-override milestone remains complete.
 P4 (SPEC-33…41) covers the capabilities deferred by P2/P3: base-URL fallback
 breadth, `label`/`matrix` path styles, cookies, selectors beyond `all`, OpenAPI
 3.1 `webhooks`, non-JSON bodies, `securitySchemes`-derived and per-operation
-auth, and remote specs. SPEC-33 through SPEC-38 are done and committed on
-`master`; SPEC-39 is done and committed.
+auth, and remote specs. P4 is complete: SPEC-33 through SPEC-40 are done and
+committed on `master`; SPEC-41 (remote specs) is done and locally verified but
+not yet committed.
 Together they ship the first-usable base-URL fallback, `label`/`matrix` path
 styles, generated and sent cookie parameters, webhook cataloguing, the
-`operationId`, tags, and path-pattern selectors, generated non-JSON bodies, and
-`securitySchemes`-derived auth and per-operation `authOperations` overrides;
-SPEC-41 remains `todo`.
+`operationId`, tags, and path-pattern selectors, generated non-JSON bodies,
+`securitySchemes`-derived auth and per-operation `authOperations` overrides, and
+remote `http(s)` spec fetching.
 
 P0 (correctness and trust) and P1 (proof it works) are both closed and
 committed on `master`. The P0 commits are:
@@ -81,8 +82,9 @@ surface and proof: a dependency-free POC API and runnable examples gallery
 (SPEC-27/28), a real-k6 live end-to-end test wired into CI (SPEC-29), a README
 overhaul (SPEC-30), and `AGENTS.md` onboarding (SPEC-31). It adds no new product
 features; selectors beyond `all`, auth derivation, and remote specs remain
-deferred (cookies were deferred at P3 time and shipped later in SPEC-35;
-non-JSON bodies shipped later in SPEC-38).
+deferred at P3 close (cookies were deferred at P3 time and shipped later in
+SPEC-35; non-JSON bodies shipped later in SPEC-38; remote specs shipped later
+in SPEC-41).
 
 P3 commits on `master`:
 
@@ -280,8 +282,10 @@ Dependencies (resolved):
   otherwise it is used
   as-is and bypasses the server-URL usability gate. Trailing slashes are
   stripped when request URLs are composed.
-- **`specs` is local-file-only.** Remote `http(s)://` documents are never
-  fetched.
+- **`specs` may be local files or remote `http(s)` URLs.** Remote documents
+  were never fetched before SPEC-41; that limitation is now fixed, subject to
+  the explicit timeout/size/redirect policy in the README. DNS/IP-level SSRF
+  filtering remains a documented non-goal.
 - **OpenAPI 3.1 `webhooks` were not catalogued at P2 time** (fixed by SPEC-37;
   they are catalogued as path operations at `/<webhookName>` after `paths`).
   Components-only documents still load but contribute zero operations; under
@@ -412,14 +416,14 @@ Claim → evidence → result:
   restating it.
 - P3 adds no new config fields or CLI flags.
 
-### P4 — deferred capability expansion (in progress)
+### P4 — deferred capability expansion (complete)
 
-P4 is in progress. Nine skeleton tickets were seeded on 2026-10-24 from a
-roadmap-vs-implementation gap review. SPEC-33, SPEC-34, SPEC-35, SPEC-36, and
-SPEC-37 are done; SPEC-38 is `in_progress` and the remaining three are `todo`
-and await planner elaboration. The order below is the work order; do not reorder
-it without updating this file. Each ticket must be planned before
-implementation, and docs must describe shipped behavior only.
+P4 is complete. Nine skeleton tickets were seeded on 2026-10-24 from a
+roadmap-vs-implementation gap review. All nine are done; SPEC-33 through SPEC-40
+are committed on `master`, and SPEC-41 is done and locally verified but not yet
+committed. The order below is the work order; do not reorder it without updating
+this file. Each ticket must be planned before implementation, and docs must
+describe shipped behavior only.
 
 | Order | Key | Ticket ID | Priority | Status | Title |
 |---|---|---|---|---|---|
@@ -428,10 +432,10 @@ implementation, and docs must describe shipped behavior only.
 | 3 | SPEC-35 | `01M5QTK8711DW0S5BFN0M78R1D` | medium | done | Generate and send cookie parameters |
 | 4 | SPEC-36 | `01M5QTKB3GR8JAST4FF8Q35VQN` | high | done | Support operation selectors beyond the `all` literal |
 | 5 | SPEC-37 | `01M5QTKE0SXC7BY1KX6WTCQGRT` | medium | done | Catalogue OpenAPI 3.1 `webhooks` |
-| 6 | SPEC-38 | `01M5QTKGSG573T640BKBVJJ8Q5` | high | in_progress | Generate non-JSON request bodies |
+| 6 | SPEC-38 | `01M5QTKGSG573T640BKBVJJ8Q5` | high | done | Generate non-JSON request bodies |
 | 7 | SPEC-39 | `01M5QTKKJBDDMR0AJV6ENT8661` | high | done | Derive global auth from `securitySchemes` |
 | 8 | SPEC-40 | `01M5QTKPE005PRTKMFG1DGEFSX` | medium | done | Add per-operation auth overrides |
-| 9 | SPEC-41 | `01M5QTKSARFS9P8RXMTS9BB2AW` | medium | todo | Fetch remote `http(s)` specs |
+| 9 | SPEC-41 | `01M5QTKSARFS9P8RXMTS9BB2AW` | medium | done | Fetch remote `http(s)` specs |
 
 Dependencies and sequencing:
 
@@ -510,7 +514,15 @@ Decisions and resolved behavior:
   required bodies declaring none of the four supported media types.
 - SPEC-39/40 must preserve explicit-config precedence and secret redaction;
   unsupported schemes stay warn-only.
-- SPEC-41 must define an explicit timeout/redirect/SSRF policy before fetching.
+- SPEC-41 (done) enables absolute `http(s)://` `specs`
+  entries with an explicit network policy: one memoized fetch per URL per run
+  (including relative external `$ref`s resolved against the remote base),
+  a 10 s `AbortController` timeout, a 5 MiB streaming body cap, a manual
+  redirect loop capped at 10 hops with relative `Location` support and
+  `https -> http` downgrade rejection, and exit-`2` errors naming the redacted
+  host. DNS/IP-level SSRF filtering is a documented non-goal; the operator owns
+  the configured URLs. Local-only `$ref` behavior is unchanged. See the README
+  [Remote specs](README.md#remote-specs-network-and-error-policy) section.
 
 Guardrails: no new dependencies without approval, emitted k6 scripts stay
 dependency-free, warnings remain non-fatal, secrets are never logged, and the
@@ -686,3 +698,20 @@ unless the product owner reopens them. Do not create tickets for them here.
   ROADMAP updated; config/auth/CLI tests added. `npm run build` clean;
   `npm test` and `npm run test:live-e2e` green. P4 remains open; SPEC-41 is
   untouched.
+- 2026-11-12: SPEC-41 implemented, reviewed, and `done` (uncommitted): `specs`
+  accepts absolute `http(s)://` URLs alongside local paths. Remote documents
+  are fetched once per run (memoized, including relative external `$ref`
+  targets resolved against the document URL with `../` normalization) under an
+  explicit policy — a 10 s `AbortController` timeout, a 5 MiB streaming body
+  cap, and a manual redirect loop capped at 10 hops with relative `Location`
+  support and `https -> http` downgrade rejection. Config rejects
+  malformed/unsupported URL-shaped entries with `specs[i]` labels; fetch,
+  parse, and `$ref` failures exit `2` before k6 with host-scoped messages and
+  masked credentials. README (network and error policy plus limitations),
+  `config.ts`/`spec.ts` JSDoc, AGENTS.md, samples, and ROADMAP updated;
+  `node:test` stub-server coverage added for the happy path, every failure
+  mode, redirects/downgrade, remote `$ref`s, memoization, mixed sources,
+  zero-operation remote documents, and redaction. `npm run build` clean;
+  `npm test` 408/408 on Node 22 and 408/408 on Node 18.20.8; a local HTTPS
+  fetch and HTTPS→HTTP downgrade check passed. CI and the no-DNS/IP SSRF
+  posture sign-off remain for a human.

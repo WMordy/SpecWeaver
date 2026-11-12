@@ -17,7 +17,7 @@ the source of truth for ticket status; ROADMAP tables can lag it.
 | `src/args.ts` | CLI flags/usage parsing (`--config`, `--vus`, `--duration`, `--out`, gate, help/version). |
 | `src/cli.ts` | Orchestration: config/specs → selection → payloads → auth → warnings → base-URL gate → emit → run → results. |
 | `src/config.ts` | YAML load, schema validation/defaults, CLI overrides, `${ENV_VAR}` resolution. |
-| `src/spec.ts` | OpenAPI 3.0/3.1 loading, `$ref` resolution (local files), operation cataloguing. |
+| `src/spec.ts` | OpenAPI 3.0/3.1 loading (local files and remote `http(s)` URLs), `$ref` resolution, operation cataloguing. |
 | `src/selection.ts` | `operations` expansion: `all`, explicit, `operationId`, tags, path patterns; deterministic union/dedupe and unmatched reporting. |
 | `src/request-data.ts` | Path/query/header/cookie parameter and JSON-body generation, and `payloads` whole-body overrides. |
 | `src/auth.ts` | Explicit token/header injection, per-operation `authOperations` overrides, `securitySchemes`-derived auth, and secret redaction. |
@@ -90,7 +90,8 @@ k6 rules:
   before k6 runs; a post-run results-file write failure also exits `2` after k6.
 - Config: YAML only, `--config` only. `operations` is required; `specs` is
   optional at the schema level but required to execute (missing `specs` exits `2`
-  before k6). `specs` are local files only. Coverage gaps warn, not fail.
+  before k6). `specs` are local paths or remote `http(s)` URLs. Coverage gaps
+  warn, not fail.
 - No unnecessary comments; match neighboring style; keep diffs scoped.
 - No new dependencies unless justified and approved. Emitted k6 scripts stay
   dependency-free (k6 built-ins + plain JS only; faker runs in the CLI).
@@ -126,13 +127,15 @@ k6 rules:
 - Zero-override runs still need a usable base URL: an explicit `baseUrl` or an
   absolute `servers[].url` (unusable entries are skipped with a warning),
   otherwise the run exits `2`.
-- `specs` are local files only; remote `http(s)` URLs are not fetched.
+- `specs` may be local paths or absolute `http(s)` URLs; remote fetches use a
+  10 s timeout, a 5 MiB cap, and a manual redirect loop with no `https -> http`
+  downgrade (see README).
 - Deferred (not shipped): non-JSON media types outside urlencoded/multipart/XML,
   unsupported security schemes (`http` basic/digest, `apiKey` in a cookie,
-  `oauth2`, `openIdConnect`, `mutualTLS`), and remote specs. Supported
-  `securitySchemes` (bearer, `apiKey` header/query) are derived since SPEC-39,
-  and configurable per-operation auth overrides (`authOperations`) since
-  SPEC-40. See [ROADMAP.md](ROADMAP.md).
+  `oauth2`, `openIdConnect`, `mutualTLS`). Remote specs shipped in SPEC-41.
+  Supported `securitySchemes` (bearer, `apiKey` header/query) are derived since
+  SPEC-39, and configurable per-operation auth overrides (`authOperations`)
+  since SPEC-40. See [ROADMAP.md](ROADMAP.md).
 
 ## Contracts and docs
 

@@ -47,7 +47,7 @@ available in v1 and link to the matching limitation in
 
 | Capability | Status | Notes |
 | --- | --- | --- |
-| OpenAPI 3.0/3.1 local specs (JSON or YAML) | Shipped | Local `$ref` resolution; remote `http(s)` specs are not fetched. |
+| OpenAPI 3.0/3.1 specs (JSON or YAML), local or remote | Shipped | Local paths and absolute `http(s)://` URLs; local and remote `$ref`s resolved (see [Remote specs](#remote-specs-network-and-error-policy)). |
 | Selector entries: `{ method, path }`, `{ operationId }`, `{ tags }`, `{ path }` patterns | Shipped | Additive forms; deterministic union expansion with `METHOD path` dedupe. |
 | Whole-catalog selector `operations: all` | Shipped | Exact, case-sensitive literal; deterministic expansion. |
 | Derived request data | Shipped | Path/query/header/cookie parameters and JSON bodies; path parameters honor `simple`, `label`, and `matrix` styles with `explode`; explicit example/examples → `default` → faker; required and optional fields generated. |
@@ -64,7 +64,7 @@ available in v1 and link to the matching limitation in
 | Cookie parameters | Shipped | `in: cookie` parameters are generated and sent in one percent-encoded `Cookie` header; array/object values serialize non-exploded (OpenAPI's cookie default is `explode: true`). No cookie jar or `Set-Cookie` handling. |
 | `securitySchemes`-derived auth | Shipped | Bearer schemes use `auth.token`; `apiKey` header/query schemes use `auth.apiKeys[<scheme name>]`. Other scheme types are warn-only. |
 | Per-operation auth overrides | Shipped | `authOperations` entries keyed by `METHOD path` replace the global explicit auth for matched operations; derived schemes then resolve against the override. Unmatched entries warn. |
-| Remote `http(s)` specs | Deferred | See [ROADMAP: P2 limitations](ROADMAP.md#p2-limitations). |
+| Remote `http(s)` specs | Shipped | Fetched once per run with a 10 s timeout, 5 MiB cap, and redirect/downgrade policy. See [Remote specs](#remote-specs-network-and-error-policy). |
 | OpenAPI 3.1 `webhooks` cataloguing | Shipped | Catalogued as path operations at `/<webhookName>` after `paths`, selectable like any path operation; k6 plays the API server that sends events, and the base URL stands in for the consumer endpoint. |
 
 ## Contents
@@ -188,8 +188,9 @@ so run the checked-in examples from the repository root.
 A complete example:
 
 ```yaml
-specs:                      # REQUIRED to execute: local path(s), no URLs
+specs:                      # REQUIRED to execute: local path(s) and/or http(s) URL(s)
   - ./openapi.yaml
+  - https://example.com/openapi.json
 operations:                 # REQUIRED: selector entries, or the literal all
   - method: GET             # explicit form: exact METHOD path match
     path: /pets
@@ -222,7 +223,7 @@ load:                       # OPTIONAL: default load profile
 
 | Field | Required | Type | Contract |
 | --- | --- | --- | --- |
-| `specs` | **yes** to execute | string \| string[] | Local OpenAPI 3.0/3.1 file path(s) (JSON or YAML). Relative paths resolve against the current working directory. Local `$ref`s are resolved; remote `http(s)://` documents are **not** fetched. Omitting `specs` exits `2` before k6 runs and before a results file is written. |
+| `specs` | **yes** to execute | string \| string[] | OpenAPI 3.0/3.1 source(s): local file path(s) or absolute `http(s)://` URLs, mixed in one list. Relative paths resolve against the current working directory. Local and remote `$ref`s are resolved. Remote URLs must include a host; unsupported schemes and malformed URL-shaped entries are config errors naming `specs[i]`. Omitting `specs` exits `2` before k6 runs and before a results file is written. See [Remote specs](#remote-specs-network-and-error-policy). |
 | `operations` | **yes** | selector entries \| all | Either a non-empty list of selector entries (`{ method, path }`, `{ operationId }`, `{ tags }`, or `{ path }`) or the exact, case-sensitive literal `all`. See [Operations](#operations-selectors). |
 | `baseUrl` | no | string | Explicit request base URL. Must be a non-empty string (empty, whitespace-only, and non-string values are config errors); otherwise it is trusted verbatim and bypasses the server-URL usability gate. Overrides the fallback `servers[].url`. See [Base URL resolution](#base-url-resolution). |
 | `auth` | no | mapping | Explicit global auth (`token`, `headers`) plus scheme-derived `apiKeys` (securityScheme name → credential). Explicit values apply to **every** selected operation; `apiKeys` values are used only where the operation's effective `security` references that scheme. Values support `${ENV_VAR}`. Absent `auth` means no explicit auth headers and no derived credentials. See [Auth](#auth). |
@@ -381,6 +382,37 @@ This happens before the k6 preflight, before any script is generated, and
 before a results file is written. The gate is selector-independent: it applies
 to explicit-list and `all` runs alike. Base-URL diagnostics redact values that
 may contain credentials.
+
+### Remote specs (network and error policy)
+
+`specs` entries may be absolute `http(s)://` URLs. Each URL is fetched exactly
+once per run (memoized, including on-demand external `$ref` targets), parsed as
+JSON first and then YAML, and resolved like a local document. Relative external
+`$ref`s in a remote document resolve against that document's URL; `../`
+segments are normalized. A local document's `$ref`s keep their local-only
+behavior.
+
+The network policy is explicit:
+
+- **Timeout:** 10 seconds per fetch, enforced with `AbortController`. A timeout
+  exits `2` with an error naming the URL host and the timeout.
+- **Size cap:** response bodies over **5 MiB** fail the fetch with a
+  deterministic error; the body is capped while streaming.
+- **Redirects:** handled manually (`redirect: "manual"`), at most 10 hops.
+  Relative `Location` headers resolve against the current URL, `http -> https`
+  upgrades are allowed, and an `https -> http` downgrade is rejected.
+  Redirects to non-`http(s)` locations are rejected too.
+- **Failures:** network errors, timeouts, non-2xx responses, oversized bodies,
+  and unparsable content each fail **before k6 runs** as exit-`2` errors naming
+  the redacted host and the reason — never a stack trace.
+- **SSRF posture (non-goal):** URLs must be absolute `http(s)` URLs with a host,
+  but there is **no** DNS/IP-based private-address filtering. The operator is
+  responsible for the URLs configured. Credentials are never printed: network
+  and redirect errors name the host only, while parse/`$ref` errors show the
+  source URL with any userinfo masked. Node's `fetch` does not accept
+  credentials embedded in a URL, so configure unauthenticated spec URLs.
+- **Mix:** local and remote specs may be combined; load order, selection,
+  warnings, and output determinism are unchanged.
 
 ### Auth
 
@@ -635,8 +667,9 @@ vars are in [`e2e/README.md`](e2e/README.md).
 
 1. **Parse the CLI and load YAML config.** Resolve `${ENV_VAR}` references and
    emit unresolved-variable warnings.
-2. **Load local specs.** Resolve local `$ref`s and catalogue operations under
-   `paths`.
+2. **Load specs.** Read local files and fetch remote `http(s)` URLs (once each,
+   with the timeout/size/redirect policy), resolve `$ref`s, and catalogue
+   operations under `paths`.
 3. **Select operations.** Expand the exact `all` literal or the configured
    selector entries deterministically. Report duplicate-operation and
    unmatched-selector warnings; exit `2` when nothing would run.
@@ -754,8 +787,11 @@ means **not available**, not partially supported:
   overrides (`authOperations`) replace the global explicit surface (SPEC-40).
   `http` basic/digest, `apiKey` in a cookie, `mutualTLS`, `openIdConnect`, and
   `oauth2` are warn-only.
-- **Remote specs are deferred.** `specs` entries are local filesystem paths
-  only; `http(s)://` documents are never fetched.
+- **Remote specs are fetched, not cached across runs.** `specs` accepts local
+  paths and absolute `http(s)://` URLs (SPEC-41). Each URL is fetched at most
+  once per run; there is no HTTP cache, proxy/auth setting, or DNS/IP-level
+  SSRF filtering — the operator owns the configured URLs. See
+  [Remote specs](#remote-specs-network-and-error-policy).
 - **A components-only 3.1 document yields zero operations.** It loads but
   catalogues nothing, so it warns and can lead to the zero-catalog exit `2`;
   webhooks-only documents are catalogued like `paths`.

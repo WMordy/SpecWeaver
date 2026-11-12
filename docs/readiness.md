@@ -506,7 +506,7 @@ SPEC-42 IDs are cited in the next subsection and are not duplicated.
 
 | ID | Class | Step | Doc ref | Symptom | Routing |
 |---|---|---|---|---|---|
-| `SW-WT-01` | minor | 03 | `package.json:32-35`; `README.md:97-101` | `npm ci` prints `1 high severity vulnerability`; `npm audit` identifies `GHSA-qxc2-j82w-r537` in direct dependency `@faker-js/faker` (`<=10.4.0`), with a semver-major fix at `10.6.0`. The walkthrough still completes with correct results. | SPEC-48 |
+| `SW-WT-01` | minor | 03 | `package.json:32-35`; `README.md:97-101` | `npm ci` prints `1 high severity vulnerability`; `npm audit` identifies `GHSA-qxc2-j82w-r537` in direct dependency `@faker-js/faker` (`<=10.4.0`), with a semver-major fix at `10.6.0`. The walkthrough still completes with correct results. | SPEC-48 (resolved — see [SPEC-48 resolution](#spec-48-resolution-append-only)) |
 
 ### Finding detail
 
@@ -530,6 +530,9 @@ SPEC-42 IDs are cited in the next subsection and are not duplicated.
   is a major-version bump, so it needs `npm run build` and `npm test`
   verification; if the bump requires source changes, the ticket splits its own
   follow-up.
+- **Resolution:** SPEC-48 upgraded `@faker-js/faker` to `10.6.0`;
+  `npm audit --audit-level=high` now exits `0` with no advisories. See
+  [SPEC-48 resolution](#spec-48-resolution-append-only).
 
 ### Existing SPEC-42 findings re-confirmed
 
@@ -574,10 +577,18 @@ Each item names the doc `file:line` to change or re-check and an exact command
 that must pass from a fresh clone. `SW-WT-01` is routed to SPEC-48; it is
 included here because P6 asks for one checkbox per routed finding.
 
-- [ ] **`SW-WT-01` (SPEC-48):** `package.json:32-35`. After upgrading
+- [x] **`SW-WT-01` (SPEC-48):** `package.json:32-35`. After upgrading
   `@faker-js/faker` to `>=10.6.0`, run from a fresh clone:
   `npm ci && npm run build && npm test && npm audit --audit-level=high`; it
   must exit `0` with no high-severity advisory.
+  - `Result:` `10.6.0` installed; the chain exits `0` with `found 0
+    vulnerabilities` (see [SPEC-48 resolution](#spec-48-resolution-append-only)).
+    Note that faker `10.6.0` declares `engines.node`
+    `^20.19.0 || ^22.13.0 || ^23.5.0 || >=24.0.0` and `engines.npm >=10`, so
+    `npm ci` now prints `EBADENGINE` warnings on Node 18 and on newer Node with
+    npm <10 (observed with npm `9.2.0` on Node `22.22.1`) even though the build
+    and all 408 tests still pass on `v18.20.8`. Aligning the documented floor is
+    tracked in SPEC-51.
 - [x] **`E2` Node 22 vs >=18:** `examples/README.md:12`. Either change the line
   to the supported range or verify the stricter claim on Node 18/20; run from a
   fresh clone on the claimed minimum:
@@ -751,7 +762,7 @@ made, and this file was not `git add`ed.
 | S9 | fixed | `samples/specweaver.config.yaml` and `samples/specweaver.zero-override.yaml` header comments show `specweaver` (after `npm i -g .`) and `node dist/cli.js` (no global install). Comment-only; YAML values unchanged and both samples still run. |
 | L10 | fixed | `e2e/README.md` records the observed missing-k6 outcome: the inner `node --test e2e/live-e2e.mjs` exits `1` and prints `requires real k6 on PATH`; a status-capture wrapper passes when it does. |
 | E11 | deferred to SPEC-49 | The attempted webhook gallery example was reverted: the shipped expected-status lookup reads `paths` only, so a `webhooks.pets.post` example checks the POC's documented `201` against the default `200`, reporting `0 passed / 2 failed` and exiting `1` under `--fail-on-check-failure`. The gallery keeps webhooks documented-but-not-demonstrated; the behavior fix is tracked in SPEC-49. |
-| `SW-WT-01` | deferred | SPEC-48; its checklist box is left unchecked. |
+| `SW-WT-01` | resolved by SPEC-48 | `@faker-js/faker` `10.6.0`; `npm audit --audit-level=high` clean. Record in [SPEC-48 resolution](#spec-48-resolution-append-only). |
 
 - **Follow-up noted (out of SPEC-45 scope, source change required):** the
   emitter's documented-2xx lookup (`src/script/emit.ts`, `documented2xx`) scans
@@ -764,3 +775,47 @@ made, and this file was not `git add`ed.
 
 `git status --porcelain -uall` listed only the intended Markdown/example files
 plus the untracked `docs/readiness.md`. No commit, branch, tag, or push was made.
+
+## SPEC-48 resolution (append-only)
+
+- **Resolution date:** 2026-11-12
+- **Base revision:** `3dbe2eb`; edits limited to `package.json`,
+  `package-lock.json`, and this record. No `src/`, `test/`, `e2e/`, README,
+  AGENTS, ROADMAP, sample, or example change was needed.
+- **Verification environment:** Node `v22.22.1` and `v18.20.8` (the latter via
+  the `node@18.20.8` npm package); k6
+  `v2.4.0 (commit/dd9395906d, go1.26.11, linux/amd64)`.
+- **Upgrade:** `@faker-js/faker` `^9.9.0` → `^10.6.0`, lockfile `10.6.0`
+  (advisory `GHSA-qxc2-j82w-r537` affects `<=10.4.0`). `npm audit
+  --audit-level=high` exits `0` and prints `found 0 vulnerabilities` (was
+  `1 high severity vulnerability`). No other dependency changed.
+- **Source compatibility:** the faker API used by `src/request-data.ts`
+  (`Faker`/`en`/`base`, `seed`, `string.uuid`, `internet.email`/`url`,
+  `date.between`, `lorem.word`, `number.int`/`float`,
+  `helpers.arrayElement`, `datatype.boolean`) is unchanged in v10, so no call
+  sites were adapted.
+- **Verification:** `npm run build` exits `0`; `npm test` reports `408` tests,
+  `408` pass, `0` fail, `0` skipped on both Node versions; `npm run
+  test:live-e2e` reports `1` pass; the canonical sample config still runs three
+  operations with `6 passed, 0 failed` against the POC API. Emitted k6 scripts
+  are unchanged and remain dependency-free (the emitter was not touched; faker
+  still runs only in the CLI).
+- **Seeded-output change:** faker v10 changed the PRNG consumption of some
+  generators. With the same seed, `string.uuid()` is unchanged while
+  `internet.email`, `internet.url`, `date.between`, `lorem.word`,
+  `number.int`/`float`, and `helpers.arrayElement` return different values than
+  `9.9.0`. Output stays deterministic within `10.6.0` (the seed-determinism
+  test passes), and generated payloads keep their declared types, formats, and
+  bounds, so no test or sample needed updating. Seeded values are not part of
+  the documented contract.
+- **Engine-floor caveat (tracked):** faker `10.6.0` declares `engines.node`
+  `^20.19.0 || ^22.13.0 || ^23.5.0 || >=24.0.0` and `engines.npm >=10`. The
+  SpecWeaver `engines.node` floor stays `>=18` because the build and all 408
+  tests pass on `v18.20.8`; however, a fresh `npm ci` now prints `EBADENGINE`
+  warnings for the dependency on Node 18 and, because of the npm requirement,
+  also on newer Node with npm <10 (observed with npm `9.2.0` on Node
+  `22.22.1`). The installs still succeed, but `engine-strict=true` would fail
+  them. Reconciling the documented Node/npm floor (with the
+  README/AGENTS/examples wording and the CI matrix) is package-metadata work
+  outside this ticket's scope; **SPEC-51** tracks it and blocks the SPEC-47
+  v1.0.0 cut.

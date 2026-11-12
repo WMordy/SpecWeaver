@@ -734,6 +734,11 @@ payloads:
     result.stderr,
     /error: `operations: all` selected no operations: the loaded spec\(s\) contribute no catalogued operations/,
   );
+  // SPEC-50: the hint names both catalogued containers, not just `paths`.
+  assert.match(
+    result.stderr,
+    /Only `paths` and OpenAPI 3\.1 `webhooks` operations are catalogued/,
+  );
   assert.doesNotMatch(result.stderr, /none of the configured operations were found/);
   assert.doesNotMatch(result.stderr, /Unmatched operations:/);
   // SPEC-13 still reports overrides that can never be applied.

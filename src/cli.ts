@@ -320,7 +320,7 @@ async function run(options: CliOptions): Promise<number> {
       process.stderr.write(
         [
           "error: `operations: all` selected no operations: the loaded spec(s) contribute no catalogued operations; nothing to execute.",
-          "Only `paths` operations are catalogued in v1; add a spec with path operations or list `operations` explicitly in the config.",
+          "Only `paths` and OpenAPI 3.1 `webhooks` operations are catalogued in v1; add a spec with path or webhook operations, or list `operations` explicitly in the config.",
         ].join("\n") + "\n",
       );
     } else {

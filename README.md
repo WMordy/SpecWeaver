@@ -296,7 +296,10 @@ follow. A webhook's operations are catalogued as path operations at
 any path operation: k6 sends webhook-shaped requests to the configured base
 URL — it plays the API server that sends events, and the base URL stands in for the consumer endpoint. They are selectable by
 every shipped selector and treated identically by generation, `payloads`, auth
-injection, emission, and the base-URL gate.
+injection, emission, and the base-URL gate. For status checks, when a `paths`
+entry and a webhook name resolve to the same route and method, the `paths`
+operation supplies the expected status; otherwise webhooks are matched in
+document order.
 
 OpenAPI 3.1 still allows a valid components-only document; such a spec loads but
 contributes no operations. SpecWeaver warns on stderr, naming the source and

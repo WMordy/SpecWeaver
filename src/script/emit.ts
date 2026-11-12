@@ -98,6 +98,7 @@ import { join } from "node:path";
 
 import type { Config, LoadConfig } from "../config.js";
 import type { GeneratedRequestData, QueryValue } from "../request-data.js";
+import { isOpenApi31, webhookPath } from "../spec.js";
 import type { JsonObject } from "../spec.js";
 
 /** The default file name of the emitted k6 script (A2). */
@@ -646,11 +647,70 @@ interface DocumentedStatuses {
   wildcard: boolean;
 }
 
+/** The operation object for `method` at `route` in a Path-Item container. */
+function findPathOperation(
+  container: unknown,
+  method: string,
+  route: string,
+): JsonObject | undefined {
+  if (!isObject(container)) {
+    return undefined;
+  }
+  const pathItem = container[route];
+  if (!isObject(pathItem)) {
+    return undefined;
+  }
+  const operation = pathItem[method.toLowerCase()];
+  return isObject(operation) ? operation : undefined;
+}
+
+/** The webhook operation catalogued at `route` (`/<webhookName>`), if any. */
+function findWebhookOperation(
+  document: JsonObject,
+  method: string,
+  route: string,
+): JsonObject | undefined {
+  const webhooks = document.webhooks;
+  if (!isObject(webhooks)) {
+    return undefined;
+  }
+  for (const [name, pathItem] of Object.entries(webhooks)) {
+    if (webhookPath(name) !== route || !isObject(pathItem)) {
+      continue;
+    }
+    const operation = pathItem[method.toLowerCase()];
+    if (isObject(operation)) {
+      return operation;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The operation object for `method` at `route`, preferring `paths` and falling
+ * back to OpenAPI 3.1 `webhooks`. The catalog maps a webhook name to
+ * `/<webhookName>` (SPEC-37), so a webhook operation resolves its declared
+ * responses exactly like a path operation (SPEC-49). When both containers could
+ * match, `paths` wins; webhooks are tried in document order.
+ */
+function findOperation(
+  document: JsonObject,
+  method: string,
+  route: string,
+): JsonObject | undefined {
+  const fromPaths = findPathOperation(document.paths, method, route);
+  if (fromPaths !== undefined || !isOpenApi31(document)) {
+    return fromPaths;
+  }
+  return findWebhookOperation(document, method, route);
+}
+
 /**
  * The documented 2xx responses for an operation (A5), or empty when the spec
  * documents none. A literal code (`200`) is kept exact; a wildcard (`2XX`) is
  * reported via {@link DocumentedStatuses.wildcard} so the check can accept any
- * 2xx status (post-review product-owner decision 3).
+ * 2xx status (post-review product-owner decision 3). `paths` and 3.1 `webhooks`
+ * operations are both resolved (SPEC-49).
  */
 function documented2xx(
   specs: readonly EmitSpec[],
@@ -658,16 +718,8 @@ function documented2xx(
   route: string,
 ): DocumentedStatuses {
   for (const spec of specs) {
-    const paths = spec.document.paths;
-    if (!isObject(paths)) {
-      continue;
-    }
-    const pathItem = paths[route];
-    if (!isObject(pathItem)) {
-      continue;
-    }
-    const operation = pathItem[method.toLowerCase()];
-    if (!isObject(operation)) {
+    const operation = findOperation(spec.document, method, route);
+    if (operation === undefined) {
       continue;
     }
     const responses = operation.responses;

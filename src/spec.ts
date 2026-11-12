@@ -933,12 +933,12 @@ function catalogueOperations(
 }
 
 /** True for an OpenAPI 3.1.x document, the only version with `webhooks`. */
-function isOpenApi31(document: JsonObject): boolean {
+export function isOpenApi31(document: JsonObject): boolean {
   return typeof document.openapi === "string" && document.openapi.startsWith("3.1.");
 }
 
 /** A webhook name becomes a path template, gaining a leading `/` when missing. */
-function webhookPath(name: string): string {
+export function webhookPath(name: string): string {
   return name.startsWith("/") ? name : `/${name}`;
 }
 

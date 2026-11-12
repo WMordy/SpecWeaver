@@ -504,6 +504,97 @@ test("mixed literal + wildcard documents accept the whole 2xx range", () => {
   assert.equal(data.operations[0].acceptAny2xx, true);
 });
 
+// --- Webhook expected statuses (SPEC-49) -----------------------------------
+
+/** Build a minimal OpenAPI 3.1 document with webhooks. */
+function webhookDocument(webhooks, paths = {}) {
+  return {
+    openapi: "3.1.0",
+    info: { title: "t", version: "1" },
+    paths,
+    webhooks,
+  };
+}
+
+test("uses a webhook's documented 2xx status for the check", () => {
+  const { data } = emitScript({
+    config: config(),
+    specs: [
+      spec(webhookDocument({ pets: { post: { responses: { "201": {} } } } })),
+    ],
+    requests: [request({ method: "POST", path: "/pets" })],
+  });
+  assert.deepEqual(data.operations[0].expectedStatus, [201]);
+  assert.equal(data.operations[0].acceptAny2xx, false);
+});
+
+test("webhook names with a leading slash resolve like catalogued routes", () => {
+  const { data } = emitScript({
+    config: config(),
+    specs: [
+      spec(
+        webhookDocument({
+          "/deliveries": { post: { responses: { "202": {} } } },
+        }),
+      ),
+    ],
+    requests: [request({ method: "POST", path: "/deliveries" })],
+  });
+  assert.deepEqual(data.operations[0].expectedStatus, [202]);
+});
+
+test("a webhook's 2XX wildcard is still treated as any 2xx status", () => {
+  const { data } = emitScript({
+    config: config(),
+    specs: [spec(webhookDocument({ pets: { post: { responses: { "2XX": {} } } } }))],
+    requests: [request({ method: "POST", path: "/pets" })],
+  });
+  assert.deepEqual(data.operations[0].expectedStatus, []);
+  assert.equal(data.operations[0].acceptAny2xx, true);
+});
+
+test("paths win over webhooks when both match the route and method", () => {
+  const { data } = emitScript({
+    config: config(),
+    specs: [
+      spec(
+        webhookDocument(
+          { pets: { post: { responses: { "202": {} } } } },
+          { "/pets": { post: { responses: { "201": {} } } } },
+        ),
+      ),
+    ],
+    requests: [request({ method: "POST", path: "/pets" })],
+  });
+  assert.deepEqual(data.operations[0].expectedStatus, [201]);
+});
+
+test("a webhook with no declared 2xx falls back to the 200 default", () => {
+  const { data } = emitScript({
+    config: config(),
+    specs: [
+      spec(webhookDocument({ pets: { post: { responses: { "400": {} } } } })),
+    ],
+    requests: [request({ method: "POST", path: "/pets" })],
+  });
+  assert.deepEqual(data.operations[0].expectedStatus, [DEFAULT_EXPECTED_STATUS]);
+});
+
+test("webhooks are ignored for OpenAPI 3.0 documents", () => {
+  const doc = {
+    openapi: "3.0.3",
+    info: { title: "t", version: "1" },
+    paths: {},
+    webhooks: { pets: { post: { responses: { "201": {} } } } },
+  };
+  const { data } = emitScript({
+    config: config(),
+    specs: [spec(doc)],
+    requests: [request({ method: "POST", path: "/pets" })],
+  });
+  assert.deepEqual(data.operations[0].expectedStatus, [DEFAULT_EXPECTED_STATUS]);
+});
+
 test("emits no k6 thresholds", () => {
   const { script } = emitScript({ config: config(), requests: [request()] });
   assert.doesNotMatch(script, /thresholds/);

@@ -16,8 +16,8 @@ P4 (SPEC-33…41) covers the capabilities deferred by P2/P3: base-URL fallback
 breadth, `label`/`matrix` path styles, cookies, selectors beyond `all`, OpenAPI
 3.1 `webhooks`, non-JSON bodies, `securitySchemes`-derived and per-operation
 auth, and remote specs. P4 is complete: SPEC-33 through SPEC-40 are done and
-committed on `master`; SPEC-41 (remote specs) is done and locally verified but
-not yet committed.
+committed on `master`; SPEC-41 (remote specs) is done and committed as
+`8221d08`.
 Together they ship the first-usable base-URL fallback, `label`/`matrix` path
 styles, generated and sent cookie parameters, webhook cataloguing, the
 `operationId`, tags, and path-pattern selectors, generated non-JSON bodies,
@@ -420,8 +420,7 @@ Claim → evidence → result:
 
 P4 is complete. Nine skeleton tickets were seeded on 2026-10-24 from a
 roadmap-vs-implementation gap review. All nine are done; SPEC-33 through SPEC-40
-are committed on `master`, and SPEC-41 is done and locally verified but not yet
-committed. The order below is the work order; do not reorder it without updating
+are committed on `master`, and SPEC-41 is done and committed as `8221d08`. The order below is the work order; do not reorder it without updating
 this file. Each ticket must be planned before implementation, and docs must
 describe shipped behavior only.
 
@@ -698,7 +697,8 @@ unless the product owner reopens them. Do not create tickets for them here.
   ROADMAP updated; config/auth/CLI tests added. `npm run build` clean;
   `npm test` and `npm run test:live-e2e` green. P4 remains open; SPEC-41 is
   untouched.
-- 2026-11-12: SPEC-41 implemented, reviewed, and `done` (uncommitted): `specs`
+- 2026-11-12: SPEC-41 implemented, reviewed, and `done` (committed as
+  `8221d08`): `specs`
   accepts absolute `http(s)://` URLs alongside local paths. Remote documents
   are fetched once per run (memoized, including relative external `$ref`
   targets resolved against the document URL with `../` normalization) under an

@@ -1,5 +1,5 @@
 {
-  "name": "specweaver",
+  "name": "@wmordy/specweaver",
   "version": "1.0.0",
   "description": "Turn OpenAPI definitions plus a YAML config into k6 load tests.",
   "type": "module",
@@ -9,6 +9,9 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": "^20.19.0 || ^22.13.0 || ^23.5.0 || >=24.0.0",
     "npm": ">=10"

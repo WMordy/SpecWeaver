@@ -163,7 +163,20 @@ map. The checked-in [`samples/`](samples/) remain the canonical minimal configs.
   k6 version
   ```
 
-From a checkout, install the CLI globally as the `specweaver` command:
+Install the published package globally as the `specweaver` command:
+
+```sh
+npm i -g specweaver
+specweaver --version
+```
+
+Or run it without installing:
+
+```sh
+npx specweaver --version
+```
+
+From a checkout, build and install the local tree the same way contributors do:
 
 ```sh
 npm ci
@@ -172,15 +185,10 @@ npm i -g .
 specweaver --version
 ```
 
-This checkout is the supported installation source. `npm i -g specweaver`
-would only work if the package were published to the npm registry.
-
 Contributors installing from a checkout use `npm ci`, which installs
 `package-lock.json` exactly and never rewrites it. `npm install` is for
-consuming the published package and can rewrite the lockfile.
-
-If you prefer not to install globally, run the built CLI directly. Every
-example in this repository uses this form:
+consuming the published package and can rewrite the lockfile. Every example in
+this repository runs against a checkout, so it uses the built CLI directly:
 
 ```sh
 node dist/cli.js --config examples/poc-api/specweaver.config.yaml \

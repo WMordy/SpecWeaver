@@ -163,17 +163,18 @@ map. The checked-in [`samples/`](samples/) remain the canonical minimal configs.
   k6 version
   ```
 
-Install the published package globally as the `specweaver` command:
+Install the published package globally. The package is scoped, but the installed
+command is the unscoped `specweaver`:
 
 ```sh
-npm i -g specweaver
+npm i -g @wmordy/specweaver
 specweaver --version
 ```
 
 Or run it without installing:
 
 ```sh
-npx specweaver --version
+npx @wmordy/specweaver --version
 ```
 
 From a checkout, build and install the local tree the same way contributors do:

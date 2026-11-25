@@ -16,6 +16,7 @@
   "scripts": {
     "build": "tsc",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "prepare": "npm run build",
     "test": "npm run build && node --test",
     "test:live-e2e": "npm run build && node --test e2e/live-e2e.mjs"
   },

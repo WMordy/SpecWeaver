@@ -163,17 +163,35 @@ map. The checked-in [`samples/`](samples/) remain the canonical minimal configs.
   k6 version
   ```
 
-Install the published package globally as the `specweaver` command:
+SpecWeaver is distributed as a release tarball on GitHub rather than through
+the npm registry. Install a specific release globally as the `specweaver`
+command:
 
 ```sh
-npm i -g specweaver
+npm i -g https://github.com/WMordy/SpecWeaver/releases/download/v1.0.0/specweaver-1.0.0.tgz
 specweaver --version
 ```
 
-Or run it without installing:
+To run the tagged source without a global install, npm builds `dist/` from the
+`prepare` script:
 
 ```sh
+npm exec --yes --package=github:WMordy/SpecWeaver#v1.0.0 -- specweaver --version
+```
+
+Or add it to a project, where the same `prepare` build runs on install:
+
+```sh
+npm i github:WMordy/SpecWeaver#v1.0.0
 npx specweaver --version
+```
+
+Global installs from git are not supported because npm does not install a git
+dependency's devDependencies; use the release tarball for a global command. To
+run a downloaded tarball without a global install:
+
+```sh
+npx ./specweaver-1.0.0.tgz --version
 ```
 
 From a checkout, build and install the local tree the same way contributors do:
@@ -187,7 +205,8 @@ specweaver --version
 
 Contributors installing from a checkout use `npm ci`, which installs
 `package-lock.json` exactly and never rewrites it. `npm install` is for
-consuming the published package and can rewrite the lockfile. Every example in
+consuming a release tarball or adding dependencies and can rewrite the
+lockfile. Every example in
 this repository runs against a checkout, so it uses the built CLI directly:
 
 ```sh

@@ -6,12 +6,11 @@ on:
       - "v*"
 
 permissions:
-  contents: read
-  id-token: write
+  contents: write
 
 jobs:
   publish:
-    name: Publish to npm
+    name: Publish GitHub release
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -21,7 +20,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
-          registry-url: https://registry.npmjs.org
 
       - name: Verify the tag matches the package version
         run: |
@@ -32,30 +30,15 @@ jobs:
           fi
           echo "tag ${GITHUB_REF_NAME} matches package version ${version}"
 
-      - name: Verify the trusted-publishing toolchain floor
+      - name: Verify the release does not already exist
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "node $(node --version), npm $(npm --version)"
-          node -e '
-          const { execSync } = require("node:child_process");
-          const [major, minor, patch] = execSync("npm --version", { encoding: "utf8" })
-            .trim()
-            .split(".")
-            .map(Number);
-          const ok = major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1)));
-          if (!ok) {
-            console.error(`npm ${major}.${minor}.${patch} is below the 11.5.1 floor for trusted publishing`);
-            process.exit(1);
-          }
-          '
-
-      - name: Verify the version is not already published
-        run: |
-          version="$(node -p "require('./package.json').version")"
-          if npm view "specweaver@${version}" version >/dev/null 2>&1; then
-            echo "::error::specweaver@${version} is already published and cannot be republished"
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "::error::release ${GITHUB_REF_NAME} already exists and cannot be replaced"
             exit 1
           fi
-          echo "specweaver@${version} is unpublished"
+          echo "release ${GITHUB_REF_NAME} does not exist yet"
 
       - name: Install dependencies
         run: npm ci
@@ -63,5 +46,17 @@ jobs:
       - name: Build CLI
         run: npm run build
 
-      - name: Publish to npm
-        run: npm publish
+      - name: Pack the release tarball
+        run: |
+          mkdir -p release
+          npm pack --ignore-scripts --pack-destination release
+          (cd release && sha256sum *.tgz > SHA256SUMS)
+          ls -l release
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" release/*.tgz release/SHA256SUMS \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes

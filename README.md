@@ -10,6 +10,14 @@ operations, generates request data, emits a k6 script that needs only k6
 built-ins and plain JavaScript, runs it with the real `k6` binary, and writes a
 machine-readable results file. It never installs k6 for you.
 
+```sh
+npm i -g https://github.com/WMordy/SpecWeaver/releases/latest/download/specweaver.tgz
+```
+
+Requires Node 20.19+/22.13+/23.5+/24+, npm >= 10, and real k6 v2.x on `PATH`.
+See [Install and requirements](#install-and-requirements) and
+[Quick start](#quick-start).
+
 ## Why SpecWeaver
 
 Writing a k6 script by hand for every service is repetitive and drifts from the
@@ -37,6 +45,96 @@ The honest differentiators:
 SpecWeaver is not a k6 replacement, a hosted load-testing service, or a
 performance benchmark generator. It is a small, deterministic front end from
 OpenAPI to k6.
+
+## Install and requirements
+
+SpecWeaver is a Node CLI distributed as a GitHub Release tarball; it is not
+published to the npm registry. It needs **Node.js 20.19+/22.13+/23.5+/24+**,
+**npm >= 10**, and **real k6 v2.x on `PATH`**. SpecWeaver never installs k6.
+
+```sh
+# 1. Install the latest release globally
+npm i -g https://github.com/WMordy/SpecWeaver/releases/latest/download/specweaver.tgz
+
+# 2. Install k6 (macOS/Linux with Homebrew; see the k6 docs for other systems)
+brew install k6
+
+# 3. Verify
+specweaver --version   # 1.0.0
+k6 version             # k6 v2.x
+```
+
+| Channel | Command | When to use |
+| --- | --- | --- |
+| Latest release (recommended) | `npm i -g https://github.com/WMordy/SpecWeaver/releases/latest/download/specweaver.tgz` | Normal use; the URL tracks the newest release. |
+| Pinned release | `npm i -g https://github.com/WMordy/SpecWeaver/releases/download/v1.0.0/specweaver-1.0.0.tgz` | Reproducible installs; swap the tag and filename for the version you want. |
+| One-off, no install | `npm exec --yes --package=github:WMordy/SpecWeaver#v1.0.0 -- specweaver --version` | Try it without changing global packages; npm builds `dist/` via `prepare`. |
+| Project dependency | `npm i github:WMordy/SpecWeaver#v1.0.0` then `npx specweaver` | Pin SpecWeaver inside a project. |
+| From a checkout | `npm ci && npm run build && npm i -g .` | Contributing or modifying SpecWeaver. |
+
+Global installs from git (`npm i -g github:...`) are **not** supported: npm does
+not install a git dependency's devDependencies, so `dist/` cannot be built. Use
+a release tarball for a global command.
+
+Other Node/npm versions print `EBADENGINE` warnings and fail installs when
+`engine-strict=true`. Missing k6 exits `2` before any request is sent.
+
+- k6 install guide: <https://grafana.com/docs/k6/latest/set-up/install-k6/>
+- Repository: <https://github.com/WMordy/SpecWeaver>
+- Releases: <https://github.com/WMordy/SpecWeaver/releases>
+- Examples: <https://github.com/WMordy/SpecWeaver/tree/master/examples>
+- Limitations: <https://github.com/WMordy/SpecWeaver/blob/master/ROADMAP.md>
+
+## Quick start
+
+### Use it on your API
+
+1. Create a config that points at your OpenAPI document and selects every
+   operation:
+
+   ```yaml
+   # specweaver.config.yaml
+   specs:
+     - ./openapi.yaml
+   operations: all
+   ```
+
+2. Run it:
+
+   ```sh
+   specweaver --config specweaver.config.yaml --vus 10 --duration 30s
+   ```
+
+3. Read the console summary and `specweaver-results.json` in the current
+   directory (or pass `--out <path>`).
+
+`operations: all` with `specs` is the zero-override path: payloads and the base
+URL come from the OpenAPI document. Add `baseUrl` if the document has no usable
+`servers[].url`. Relative paths resolve from the current working directory.
+
+### Try the bundled demo
+
+The repository ships a dependency-free POC API. Clone it and start the server in
+one terminal:
+
+```sh
+git clone https://github.com/WMordy/SpecWeaver.git
+cd SpecWeaver
+node examples/poc-api/server.js
+```
+
+Wait for `poc-api listening on http://127.0.0.1:8080`, then run the canonical
+config in a second terminal from the repository root:
+
+```sh
+specweaver --config examples/poc-api/specweaver.config.yaml \
+  --vus 1 --duration 2s --out /tmp/specweaver-quickstart.json
+```
+
+The run exits `0` with six operations and 12/12 checks. Without a global
+install, build the checkout (`npm ci && npm run build`) and use
+`node dist/cli.js` instead of `specweaver`. Stop the server with `Ctrl+C`; it
+prints `poc-api shutting down` and exits `0`.
 
 ## Features at a glance
 
@@ -72,11 +170,11 @@ are explicitly not available in v1 and link to the matching limitation in
 ## Contents
 
 - [Why SpecWeaver](#why-specweaver)
+- [Install and requirements](#install-and-requirements)
+- [Quick start](#quick-start)
 - [Features at a glance](#features-at-a-glance)
 - [Contents](#contents)
-- [Quick start (2 minutes)](#quick-start-2-minutes)
 - [Examples](#examples)
-- [Install and requirements](#install-and-requirements)
 - [Configuration](#configuration)
 - [CLI reference](#cli-reference)
 - [Recipes](#recipes)
@@ -87,46 +185,6 @@ are explicitly not available in v1 and link to the matching limitation in
 - [Troubleshooting](#troubleshooting)
 - [Development and testing](#development-and-testing)
 - [For AI agents](#for-ai-agents)
-
-## Quick start (2 minutes)
-
-Prerequisites: Node.js 20.19+/22.13+/23.5+/24+ (matching `@faker-js/faker` 10;
-verified on 20.19.0 and 22.x; CI uses both), npm >= 10, real `k6` v2.x on
-`PATH`, and this repository checked out. All commands run from the repository
-root.
-
-In the first terminal, install, build, and start the checked-in POC API:
-
-```sh
-npm ci
-npm run build
-node examples/poc-api/server.js
-```
-
-Wait for its readiness line:
-
-```text
-poc-api listening on http://127.0.0.1:8080
-```
-
-In a second terminal, still in the repository root, run the canonical POC
-config and inspect the results JSON:
-
-```sh
-node dist/cli.js --config examples/poc-api/specweaver.config.yaml \
-  --vus 1 --duration 2s --out /tmp/specweaver-quickstart.json
-cat /tmp/specweaver-quickstart.json
-```
-
-The run exits `0`. The summary reports `Outcome: success`, `k6 exit code: 0`,
-and the six selected operations; the exact pass counts depend on how many
-iterations complete in two seconds. The results file is at
-`/tmp/specweaver-quickstart.json`. Omit `--out` to write the default
-`specweaver-results.json` in the current directory instead.
-
-Stop the POC server with `Ctrl+C`; it prints `poc-api shutting down` and exits
-`0`. The POC API is example/test infrastructure, not a supported service — see
-[`examples/poc-api/README.md`](examples/poc-api/README.md).
 
 ## Examples
 
@@ -147,72 +205,6 @@ Highlights:
 
 The gallery also includes a copy-pasteable CI snippet and a feature-to-example
 map. The checked-in [`samples/`](samples/) remain the canonical minimal configs.
-
-## Install and requirements
-
-- **Node.js 20.19+/22.13+/23.5+/24+** and **npm >= 10** (`package.json`
-  `engines` mirror `@faker-js/faker` 10; verified on 20.19.0 and 22.x; CI uses
-  both). Other versions print `EBADENGINE` warnings, and fail installs when
-  `engine-strict=true`.
-- **Real `k6` v2.x on `PATH`** (verified with `k6 v2.4.0`). SpecWeaver never
-  installs k6. If it is missing, SpecWeaver exits `2` before running anything
-  with an actionable message. Install it from
-  <https://grafana.com/docs/k6/latest/set-up/install-k6/> and verify with:
-
-  ```sh
-  k6 version
-  ```
-
-SpecWeaver is distributed as a release tarball on GitHub rather than through
-the npm registry. Install a specific release globally as the `specweaver`
-command:
-
-```sh
-npm i -g https://github.com/WMordy/SpecWeaver/releases/download/v1.0.0/specweaver-1.0.0.tgz
-specweaver --version
-```
-
-To run the tagged source without a global install, npm builds `dist/` from the
-`prepare` script:
-
-```sh
-npm exec --yes --package=github:WMordy/SpecWeaver#v1.0.0 -- specweaver --version
-```
-
-Or add it to a project, where the same `prepare` build runs on install:
-
-```sh
-npm i github:WMordy/SpecWeaver#v1.0.0
-npx specweaver --version
-```
-
-Global installs from git are not supported because npm does not install a git
-dependency's devDependencies; use the release tarball for a global command. To
-run a downloaded tarball without a global install:
-
-```sh
-npx ./specweaver-1.0.0.tgz --version
-```
-
-From a checkout, build and install the local tree the same way contributors do:
-
-```sh
-npm ci
-npm run build
-npm i -g .
-specweaver --version
-```
-
-Contributors installing from a checkout use `npm ci`, which installs
-`package-lock.json` exactly and never rewrites it. `npm install` is for
-consuming a release tarball or adding dependencies and can rewrite the
-lockfile. Every example in
-this repository runs against a checkout, so it uses the built CLI directly:
-
-```sh
-node dist/cli.js --config examples/poc-api/specweaver.config.yaml \
-  --vus 1 --duration 2s
-```
 
 ## Configuration
 
@@ -930,7 +922,7 @@ report the message if it persists.
 Prerequisites: Node.js 20.19+/22.13+/23.5+/24+ and npm >= 10 (matching
 `@faker-js/faker` 10; verified on 20.19.0 and 22.x; CI uses both), `npm ci`,
 and real k6 on `PATH` for the suites that use it. Release history lives in
-`CHANGELOG.md` in the repository (it is not part of the npm tarball).
+`CHANGELOG.md` in the repository (it is not part of the release tarball).
 
 ```sh
 npm ci            # install from package-lock.json
@@ -1058,11 +1050,30 @@ including links into the other Markdown files it points at.
 
 ## For AI agents
 
-Read [`AGENTS.md`](AGENTS.md) before changing code. It is the onboarding map for
-AI coding agents: repo layout, canonical build/test commands, test layout,
-code conventions, ticket/ROADMAP workflow, and guardrails. It links back here
-for the user-facing contract, and to [`ROADMAP.md`](ROADMAP.md) for phase status
-and limitations, rather than duplicating them.
+If you are an agent **using** SpecWeaver (not changing it), the contract is:
+
+```sh
+npm i -g https://github.com/WMordy/SpecWeaver/releases/latest/download/specweaver.tgz
+specweaver --config specweaver.config.yaml --vus 10 --duration 30s
+```
+
+- Input: a YAML config with `specs` (local paths or absolute `http(s)` URLs) and
+  `operations` (`all` or selector entries). `baseUrl` is optional when the spec
+  has a usable `servers[].url`.
+- Output: a console summary and `specweaver-results.json` (or `--out <path>`).
+- Exit codes: `0` success; `1` k6 failure or a failed
+  `--fail-on-check-failure`; `2` config/spec/preflight error.
+- Requires real `k6` on `PATH`; it never installs k6.
+- Relative paths resolve from the current working directory.
+- Warnings are `warning:` lines on stderr and never change the exit code; secrets
+  are never printed.
+- Minimal examples: [`samples/`](samples/) and the
+  [configuration reference](#configuration).
+
+If you are **changing** SpecWeaver, read [`AGENTS.md`](AGENTS.md) first: repo
+layout, canonical build/test commands, test layout, conventions, ticket
+workflow, and guardrails. It links to [`ROADMAP.md`](ROADMAP.md) for phase status
+and limitations instead of duplicating them.
 
 ## License
 

@@ -5,9 +5,10 @@ YAML config into dependency-free k6 load tests, runs them, and writes a results
 JSON.
 
 **Current phase:** P0 (correctness/trust), P1 (proof), P2 (zero-override), P3
-(adoption + real-k6 live proof), and P4 (deferred capability expansion) are done
-and committed. P5 (public-release readiness, SPEC-42…50) is active. Phase
-status, work order, and limitations live
+(adoption + real-k6 live proof), P4 (deferred capability expansion), and P5
+(public-release readiness, SPEC-42…51) are done and committed. v1.0.0 shipped
+on 2026-11-25 as a GitHub Release tarball; npm publishing is parked in SPEC-53.
+Phase status, work order, and limitations live
 in [ROADMAP.md](ROADMAP.md) — do not duplicate them here. The Kanban board is
 the source of truth for ticket status; ROADMAP tables can lag it.
 

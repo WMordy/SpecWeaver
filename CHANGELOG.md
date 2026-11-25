@@ -13,7 +13,7 @@ First public release, covering everything since the `0.1.0` scaffold. The
 v1.0.0 tree was prepared on 2026-11-13 and released on 2026-11-25 as a GitHub
 Release tarball: tag `v1.0.0` on commit `f509035`,
 <https://github.com/WMordy/SpecWeaver/releases/tag/v1.0.0>, assets
-`specweaver-1.0.0.tgz` and `SHA256SUMS`
+`specweaver-1.0.0.tgz`, the stable alias `specweaver.tgz`, and `SHA256SUMS`
 (`a5adb89a0821e46fe5ac8cf38864e6464a2ec58fd20a855fcfb83e3d847cf7ff`).
 Install with the tarball URL or the `github:` paths in the README. **npm
 publishing has not been performed**; the registry path is parked in SPEC-53.

@@ -638,6 +638,9 @@ P5 limitations and pending items:
   dependency, or test change.
 - **Not performed:** `npm publish`, `git tag v1.0.0`, and any GitHub release.
   These remain human actions.
+- **Superseded (2026-11-25):** the tag and GitHub release were performed as a
+  tarball release; `npm publish` remains unperformed. See the release record
+  below.
 - **Outstanding human checks:** required status checks must name
   `Build and test (Node 20.19.0)` and `Build and test (Node 22)`; the first
   matrix CI run on `6aa0944`/`7045c5f` had not been observed; repository
@@ -651,7 +654,9 @@ P5 limitations and pending items:
 - **Tag:** annotated `v1.0.0` (object `987a74f`) on commit `f509035`.
 - **Artifact:** <https://github.com/WMordy/SpecWeaver/releases/tag/v1.0.0>
   with `specweaver-1.0.0.tgz` (130,598 bytes) and `SHA256SUMS`
-  (`a5adb89a0821e46fe5ac8cf38864e6464a2ec58fd20a855fcfb83e3d847cf7ff`).
+  (`a5adb89a0821e46fe5ac8cf38864e6464a2ec58fd20a855fcfb83e3d847cf7ff`). The
+  same bytes are published as `specweaver.tgz`, which backs the stable
+  `releases/latest/download/specweaver.tgz` install URL.
 - **Verification:** `sha256sum -c` OK; `npm i -g <release-tarball-url>` and
   `specweaver --version` = `1.0.0` on Node 20.19.0 (npm 10.8.2) and Node
   22.22.1; `npm exec --package=github:WMordy/SpecWeaver#v1.0.0` and a

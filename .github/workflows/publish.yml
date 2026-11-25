@@ -50,6 +50,7 @@ jobs:
         run: |
           mkdir -p release
           npm pack --ignore-scripts --pack-destination release
+          cp "$(ls release/specweaver-*.tgz)" release/specweaver.tgz
           (cd release && sha256sum *.tgz > SHA256SUMS)
           ls -l release
 

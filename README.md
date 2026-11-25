@@ -131,7 +131,8 @@ specweaver --config examples/poc-api/specweaver.config.yaml \
   --vus 1 --duration 2s --out /tmp/specweaver-quickstart.json
 ```
 
-The run exits `0` with six operations and 12/12 checks. Without a global
+The run exits `0` with six operations; the exact check count depends on how
+many iterations complete in two seconds (12/12 on a local run). Without a global
 install, build the checkout (`npm ci && npm run build`) and use
 `node dist/cli.js` instead of `specweaver`. Stop the server with `Ctrl+C`; it
 prints `poc-api shutting down` and exits `0`.

@@ -7,12 +7,17 @@ source of truth for ticket status and limitations; this file summarizes what
 shipped. Each bullet names the test suite, commit, or board record that covers
 it.
 
-## [1.0.0] — 2026-11-13 (prepared, not published)
+## [1.0.0] — 2026-11-25
 
-First public-release-ready cut, covering everything since the `0.1.0`
-scaffold. This entry records the prepared repository tree only: **no
-`npm publish`, no `git tag v1.0.0`, and no GitHub release has been
-performed.** The go/no-go record is in
+First public release, covering everything since the `0.1.0` scaffold. The
+v1.0.0 tree was prepared on 2026-11-13 and released on 2026-11-25 as a GitHub
+Release tarball: tag `v1.0.0` on commit `f509035`,
+<https://github.com/WMordy/SpecWeaver/releases/tag/v1.0.0>, assets
+`specweaver-1.0.0.tgz` and `SHA256SUMS`
+(`a5adb89a0821e46fe5ac8cf38864e6464a2ec58fd20a855fcfb83e3d847cf7ff`).
+Install with the tarball URL or the `github:` paths in the README. **npm
+publishing has not been performed**; the registry path is parked in SPEC-53.
+The go/no-go record is in
 [ROADMAP.md](ROADMAP.md#p5--public-release-readiness-spec-4251-complete).
 
 ### v1 core (SPEC-1…12)

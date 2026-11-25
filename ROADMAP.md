@@ -5,15 +5,15 @@ priorities change; the Kanban board remains the source of truth for ticket statu
 
 - **Project:** SpecWeaver (`SPEC`) — `01M57WNZ2HM1QNBMD684YFXK7D`
 - **Audit of record:** SPEC-12 (closed) — `01M5CJ3JWM0S79R1GNVEEVJ5GX`
-- **Snapshot:** 2026-11-13
+- **Snapshot:** 2026-11-25
 
 ## Where we are
 
-P5 (public-release readiness) is complete: SPEC-42…51 are `done`, and the
-v1.0.0 tree is prepared (version bump, CHANGELOG, and the P5 closeout below).
-It has **not** been published to npm, tagged, or released; the recorded
-go/no-go decision is in the P5 section. The paragraphs that follow describe
-earlier snapshots and are kept as recorded.
+P5 (public-release readiness) is complete: SPEC-42…51 are `done`, and v1.0.0
+was released on 2026-11-25 as a GitHub Release tarball (tag `v1.0.0` on
+`f509035`; `specweaver-1.0.0.tgz` + `SHA256SUMS`). It has **not** been
+published to npm; that path is parked in SPEC-53. The paragraphs that follow
+describe earlier snapshots and are kept as recorded.
 
 SPEC-1 through SPEC-36 are `done`; P3 (adoption and live end-to-end proof) is
 complete and committed. The P2 zero-override milestone remains complete.
@@ -124,8 +124,8 @@ appear in the change log at their own commits. None were re-run by SPEC-42
 IDs and the no-DNS/IP SSRF posture sign-off remain a human step.
 
 P5 (public-release readiness, SPEC-42…51) is complete; see the P5 section
-below. The v1.0.0 tree is prepared but has not been published, tagged, or
-released.
+below. The v1.0.0 tree was released as a GitHub Release tarball on 2026-11-25;
+npm publishing remains parked in SPEC-53.
 
 ## Work order (do not reorder without updating this file)
 
@@ -610,8 +610,9 @@ Resolved decisions:
 
 P5 limitations and pending items:
 
-- **v1.0.0 is prepared only.** No `npm publish`, `git tag v1.0.0`, or GitHub
-  release has been performed; see the go/no-go record.
+- **v1.0.0 released as a GitHub Release tarball (2026-11-25).** Tag `v1.0.0`
+  is on `f509035`; the release carries `specweaver-1.0.0.tgz` and
+  `SHA256SUMS`. No `npm publish` has been performed; see SPEC-53.
 - The examples gallery still has no webhook example. SPEC-45 reverted its
   attempt because checks failed; SPEC-49 fixed that cause, but adding the
   example remains a follow-up, not part of this cut.
@@ -641,6 +642,23 @@ P5 limitations and pending items:
   `Build and test (Node 20.19.0)` and `Build and test (Node 22)`; the first
   matrix CI run on `6aa0944`/`7045c5f` had not been observed; repository
   visibility and publication settings remain manual.
+
+#### Release record (2026-11-25)
+
+- **Channel:** GitHub Releases tarball, not npm. npm's first-publish 2FA gate
+  blocked both the unscoped and scoped names; the registry path is parked in
+  SPEC-53.
+- **Tag:** annotated `v1.0.0` (object `987a74f`) on commit `f509035`.
+- **Artifact:** <https://github.com/WMordy/SpecWeaver/releases/tag/v1.0.0>
+  with `specweaver-1.0.0.tgz` (130,598 bytes) and `SHA256SUMS`
+  (`a5adb89a0821e46fe5ac8cf38864e6464a2ec58fd20a855fcfb83e3d847cf7ff`).
+- **Verification:** `sha256sum -c` OK; `npm i -g <release-tarball-url>` and
+  `specweaver --version` = `1.0.0` on Node 20.19.0 (npm 10.8.2) and Node
+  22.22.1; `npm exec --package=github:WMordy/SpecWeaver#v1.0.0` and a
+  project-local `npm i github:...` both report `1.0.0`; one POC-API run passed
+  12/12 checks.
+- **Visibility:** the repository is public, so the release URLs and `github:`
+  installs work without authentication.
 
 ## Explicit non-goals for this roadmap
 
@@ -860,4 +878,5 @@ unless the product owner reopens them. Do not create tickets for them here.
   both lockfile fields, new `CHANGELOG.md` covering SPEC-1…51, README results
   example updated, and this P5 closeout with the recorded go/no-go. Build,
   414/414 tests, live e2e, `npm audit --audit-level=high`, and the link/anchor
-  validator (6 files, 138 links) pass. Not published, tagged, or released.
+  validator (6 files, 138 links) pass. Released as a GitHub Release tarball on
+  2026-11-25 (tag `v1.0.0` on `f509035`); npm publishing parked in SPEC-53.
